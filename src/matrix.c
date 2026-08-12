@@ -1,4 +1,4 @@
-/*  Copyright (C) 2024-2025 P. David Buchan (pdbuchan@gmail.com)
+/*  Copyright (C) 2024-2026 P. David Buchan (pdbuchan@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -29,8 +29,8 @@
 
 // Function prototypes
 int inputtext (char *);
-int rgb_primaries (double **);
-int illum_white (double *);
+int rgb_primaries (double **, int *);
+int illum_white (double *, int);
 int gaussjordan (int, double **);
 int *allocate_intmem (int);
 double *allocate_doublemem (int);
@@ -40,10 +40,163 @@ char *allocate_strmem (int);
 // Set some symbolic constants.
 #define MAXLEN 256  // Maximum number of characters per line
 
-int
-main (int argc, char **argv) {
+typedef struct {
+  const char *name;
+  double xr, yr;
+  double xg, yg;
+  double xb, yb;
+  const char *source_quality;
+  const char *source_note;
+  const char *native_white_name;
+  double xw, yw;
+  int native_white_known;
+} RGBSpace;
 
-  int i, j, k;
+typedef struct {
+  const char *name;
+  double x, y;
+  const char *source_note;
+} WhitePoint;
+
+// Primary coordinates are kept at the precision at which the defining standard,
+// originating profile, or historical source specifies them.  Do not add digits
+// merely by substituting a more precise chromaticity for a named illuminant: for
+// standardized RGB spaces, the reference-white coordinates are part of the RGB
+// space definition.
+//
+// "standard" means a normative standard/registry was available; "originator/profile"
+// means an originating author or widely distributed defining profile was available;
+// "historical/secondary" means no normative definition was located and the values
+// are retained from the Kang/Pascale source set used by the original program.
+
+static const RGBSpace rgb_spaces[] = {
+  {"sRGB / ITU-R BT.709", 0.6400,0.3300, 0.3000, 0.6000, 0.1500, 0.0600,
+   "standard", "IEC 61966-2-1 / ITU-R BT.709", "D65 (space definition)", 0.3127, 0.3290, 1},
+  {"Adobe RGB (1998)", 0.6400, 0.3300, 0.2100, 0.7100, 0.1500,0.0600,
+   "standard", "Adobe RGB (1998) Color Image Encoding", "D65 (space definition)", 0.3127, 0.3290, 1},
+  {"Apple RGB", 0.6250, 0.3400, 0.2800, 0.5950, 0.1550, 0.0700,
+   "originator/profile", "legacy Apple/ColorSync profile definition; cross-checked against Adobe profile set", "D65 (legacy profile)", 0.3127, 0.3290, 1},
+  {"Best RGB", 0.7347, 0.2653, 0.2150, 0.7750, 0.1300, 0.0350,
+   "originator/profile", "Bruce Lindbloom working-space definition", "D50 (working-space definition)", 0.3457, 0.3585, 1},
+  {"Beta RGB", 0.6888, 0.3112, 0.1986, 0.7551, 0.1265, 0.0352,
+   "originator/profile", "Bruce Lindbloom working-space definition", "D50 (working-space definition)", 0.3457, 0.3585, 1},
+  {"Bruce RGB", 0.6400, 0.3300, 0.2800, 0.6500, 0.1500, 0.0600,
+   "originator/profile", "Bruce Lindbloom working-space definition", "D65 (working-space definition)", 0.3127, 0.3290, 1},
+  {"CIE 1931 RGB (2 degree observer)",
+   0.7346900, 0.2653100, 0.2736827, 0.7174214, 0.1665347, 0.0088840,
+   "historical/derived", "700.0, 546.1 and 435.8 nm primaries evaluated from official CIE 1931 2 degree CMFs", "equal-energy E", 1.0 / 3.0, 1.0 / 3.0, 1},
+  {"CIE 1964/RGB (legacy secondary table)", 0.7232, 0.2768, 0.1248, 0.8216, 0.1616, 0.0134,
+   "historical/secondary", "retained from Kang; CIE standardized a 10 degree XYZ observer, not this RGB working space", "equal-energy E (historical convention)", 1.0 / 3.0, 1.0 / 3.0, 1},
+  {"ColorMatch RGB", 0.6300, 0.3400, 0.2950, 0.6050, 0.1500, 0.0750,
+   "originator/profile", "legacy ColorMatch profile definition", "D50 (profile definition)", 0.3457, 0.3585, 1},
+  {"Don RGB 4", 0.6960, 0.3000, 0.2150, 0.7650, 0.1300, 0.0350,
+   "originator/profile", "Don Hutcheson / HutchColor working-space definition", "D50 (working-space definition)", 0.3457, 0.3585, 1},
+  {"EBU Tech. 3213-E", 0.6400, 0.3300, 0.2900, 0.6000, 0.1500, 0.0600,
+   "standard", "EBU Tech. 3213-E / ITU-R BT.470 625-line systems", "D65", 0.3127, 0.3290, 1},
+  {"eciRGB v2", 0.6700, 0.3300, 0.2100, 0.7100, 0.1400, 0.0800,
+   "standard", "ECI / ISO 22028-2 registry definition", "D50 (space definition)", 0.3457, 0.3585, 1},
+  {"Ekta Space PS5", 0.6950, 0.3050, 0.2600, 0.7000, 0.1100, 0.0050,
+   "originator/profile", "Joseph Holmes working-space/profile definition", "D50 (profile definition)", 0.3457, 0.3585, 1},
+  {"Eureka RGB", 0.6915, 0.3083, 0.0000, 1.0000, 0.1440, 0.0296,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0, 0.0, 0},
+  {"Extended RGB", 0.7010, 0.2990, 0.1700, 0.7960, 0.1310, 0.0460,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0, 0.0, 0},
+  {"Guild RGB", 0.7000, 0.3000, 0.2550, 0.7200, 0.1500, 0.0500,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0, 0.0, 0},
+  {"Ink-jet RGB", 0.7000, 0.3000, 0.2500, 0.7200, 0.1300, 0.0500,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0, 0.0, 0},
+  {"Judd-Wyszecki RGB", 0.7347, 0.2653, 0.0743, 0.8338, 0.1741, 0.0050,
+   "historical/secondary", "retained from Kang/Pascale; not a modern RGB working-space standard", NULL, 0.0, 0.0, 0},
+  {"Kress RGB", 0.6915, 0.3083, 0.1547, 0.8059, 0.1440, 0.0297,
+   "historical/secondary", "retained from Kang; primaries correspond approximately to spectral choices", NULL, 0.0, 0.0, 0},
+  {"Laser RGB (Starkweather)", 0.7117241, 0.2882321, 0.0328204, 0.8029257, 0.1632099, 0.0119374,
+   "historical/derived", "633, 514 and 442 nm laser primaries evaluated from official CIE 1931 2 degree CMFs", NULL, 0.0, 0.0, 0},
+  {"NTSC (1953)", 0.6700, 0.3300, 0.2100, 0.7100, 0.1400, 0.0800,
+   "standard/historical", "NTSC 1953 / ITU-R BT.470 System M", "C (system definition)", 0.310, 0.316, 1},
+  {"PAL / SECAM (BT.470 625-line)", 0.6400, 0.3300, 0.2900, 0.6000, 0.1500, 0.0600,
+   "standard", "ITU-R BT.470 systems B/G and EBU", "D65", 0.3127, 0.3290, 1},
+  {"ProPhoto RGB (ROMM primaries)", 0.7347, 0.2653, 0.1596, 0.8404, 0.0366, 0.0001,
+   "originator/profile", "ProPhoto profile uses the ROMM RGB primary set", "D50", 0.3457, 0.3585, 1},
+  {"ROMM RGB / RIMM RGB", 0.7347, 0.2653, 0.1596, 0.8404, 0.0366, 0.0001,
+   "standard", "ISO 22028-2 ROMM RGB / I3A 7466 RIMM RGB", "D50 (encoding definition)", 0.3457, 0.3585, 1},
+  {"ROM RGB", 0.8730, 0.1440, 0.1750, 0.9270, 0.0850, 0.0001,
+   "historical/secondary", "retained from Kang/Pascale; no normative definition located", NULL, 0.0, 0.0, 0},
+  {"SGI RGB", 0.6250, 0.3400, 0.2800, 0.5950, 0.1550, 0.0700,
+   "historical/secondary", "retained from Kang/Pascale; same primary set as legacy Apple RGB", NULL, 0.0, 0.0, 0},
+  {"SMPTE-C / SMPTE 170M", 0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700,
+   "standard", "SMPTE-C / SMPTE 170M; cross-checked in ITU-R BT.2380", "D65", 0.3127, 0.3290, 1},
+  {"SMPTE 240M", 0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700,
+   "standard", "SMPTE 240M; cross-checked in ITU-R BT.2380", "D65", 0.3127, 0.3290, 1},
+  {"Sony P-22 phosphors", 0.6250, 0.3400, 0.2800, 0.5950, 0.1550, 0.0700,
+   "historical/secondary", "legacy device-phosphor coordinates retained from Kang/Pascale", NULL, 0.0, 0.0, 0},
+  {"Adobe Wide Gamut RGB", 0.7347, 0.2653, 0.1152, 0.8264, 0.1566, 0.0177,
+   "originator/profile", "legacy Adobe Wide Gamut RGB profile coordinates; retained rather than forced to a secondary table", "D50 (profile definition)", 0.3457, 0.3585, 1},
+  {"Wright RGB", 0.7260, 0.2740, 0.1547, 0.8059, 0.1440, 0.0297,
+   "historical/secondary", "retained from Kang/Pascale; historical experimental RGB system", NULL, 0.0, 0.0, 0},
+  {"Usami RGB", 0.7347, 0.2653, -0.0860, 1.0860, 0.0957, -0.0314,
+   "historical/secondary", "retained from Kang; imaginary green/blue primaries intentionally lie outside the spectral locus", NULL, 0.0, 0.0, 0}
+};
+
+#define N_RGB_SPACES ((int) (sizeof (rgb_spaces) / sizeof (rgb_spaces[0])))
+
+// General illuminant/white choices.  Where current CIE spectral data are
+// available, x,y values below were recomputed from the official CIE SPD data
+// at its published sampling interval with the official CIE 1931 or CIE 1964
+// colour-matching functions.  These
+// general illuminant values are intentionally separate from the nominal white
+// coordinates that define standardized RGB spaces.
+
+static const WhitePoint white_points[] = {
+  {"CIE D65, 1931 2 degree", 0.31272687, 0.32902321, "official CIE D65 1 nm SPD + CIE 1931 CMFs"},
+  {"CIE D65, 1964 10 degree", 0.31382365, 0.33099899, "official CIE D65 1 nm SPD + CIE 1964 CMFs"},
+  {"CIE D50, 1931 2 degree", 0.34568422, 0.35850403, "official CIE D50 1 nm SPD + CIE 1931 CMFs"},
+  {"CIE D50, 1964 10 degree", 0.34774768, 0.35953602, "official CIE D50 1 nm SPD + CIE 1964 CMFs"},
+  {"CIE A, 1931 2 degree", 0.44757351, 0.40743944, "official CIE A 1 nm SPD + CIE 1931 CMFs"},
+  {"CIE A, 1964 10 degree", 0.45117394, 0.40593660, "official CIE A 1 nm SPD + CIE 1964 CMFs"},
+  {"CIE B, 1931 2 degree (legacy)", 0.34830,0.35160, "legacy published chromaticity; CIE B is obsolete and no current CIE SPD dataset was located"},
+  {"CIE C, 1931 2 degree", 0.31005847, 0.31614971, "official CIE C SPD + CIE 1931 CMFs"},
+  {"CIE C, 1964 10 degree", 0.31038866, 0.31905071, "official CIE C SPD + CIE 1964 CMFs"},
+  {"CIE D55, 1931 2 degree", 0.33242410, 0.34742804, "official CIE D55 SPD + CIE 1931 CMFs"},
+  {"CIE D55, 1964 10 degree", 0.33411634, 0.34876609, "official CIE D55 SPD + CIE 1964 CMFs"},
+  {"ACES white point (D60-like), 1931 2 degree", 0.32168, 0.33767, "SMPTE ST 2065-1 / Academy ACES definition"},
+  {"CIE D75, 1931 2 degree", 0.29902230, 0.31485274, "official CIE D75 SPD + CIE 1931 CMFs"},
+  {"CIE D75, 1964 10 degree", 0.29967997, 0.31740324, "official CIE D75 SPD + CIE 1964 CMFs"},
+  {"CIE daylight 9300 K (D93), 1931 2 degree", 0.28314501, 0.29711289, "CIE daylight-locus formula at 9300 K"},
+  {"CIE daylight 9300 K (D93), 1964 10 degree", 0.28325, 0.30040, "CIE daylight components evaluated with CIE 1964 CMFs; rounded to avoid false precision"},
+  {"Equal-energy E, 1931 2 degree", 1.0 / 3.0, 1.0 / 3.0, "mathematical equal-energy white"},
+  {"Equal-energy E, 1964 10 degree", 1.0 / 3.0, 1.0 / 3.0, "mathematical equal-energy white"},
+  {"CIE FL1, 1931 2 degree", 0.31306243, 0.33710648, "CIE 015:2018 FL1 SPD + CIE 1931 CMFs"},
+  {"CIE FL1, 1964 10 degree", 0.31809880, 0.33548945, "CIE 015:2018 FL1 SPD + CIE 1964 CMFs"},
+  {"CIE FL2, 1931 2 degree", 0.37206815, 0.37512256, "CIE 015:2018 FL2 SPD + CIE 1931 CMFs"},
+  {"CIE FL2, 1964 10 degree", 0.37927483, 0.36722793, "CIE 015:2018 FL2 SPD + CIE 1964 CMFs"},
+  {"CIE FL3, 1931 2 degree", 0.40909004, 0.39411713, "CIE 015:2018 FL3 SPD + CIE 1931 CMFs"},
+  {"CIE FL3, 1964 10 degree", 0.41764468, 0.38312450, "CIE 015:2018 FL3 SPD + CIE 1964 CMFs"},
+  {"CIE FL4, 1931 2 degree", 0.44018110, 0.40309069, "CIE 015:2018 FL4 SPD + CIE 1931 CMFs"},
+  {"CIE FL4, 1964 10 degree", 0.44924770, 0.39060548, "CIE 015:2018 FL4 SPD + CIE 1964 CMFs"},
+  {"CIE FL5, 1931 2 degree", 0.31375735, 0.34516065, "CIE 015:2018 FL5 SPD + CIE 1931 CMFs"},
+  {"CIE FL5, 1964 10 degree", 0.31974054, 0.34236696, "CIE 015:2018 FL5 SPD + CIE 1964 CMFs"},
+  {"CIE FL6, 1931 2 degree", 0.37787777, 0.38819415, "CIE 015:2018 FL6 SPD + CIE 1931 CMFs"},
+  {"CIE FL6, 1964 10 degree", 0.38662283, 0.37837312, "CIE 015:2018 FL6 SPD + CIE 1964 CMFs"},
+  {"CIE FL7, 1931 2 degree", 0.31285247, 0.32917418, "CIE 015:2018 FL7 SPD + CIE 1931 CMFs"},
+  {"CIE FL7, 1964 10 degree", 0.31564564, 0.32950815, "CIE 015:2018 FL7 SPD + CIE 1964 CMFs"},
+  {"CIE FL8, 1931 2 degree", 0.34580575, 0.35861758, "CIE 015:2018 FL8 SPD + CIE 1931 CMFs"},
+  {"CIE FL8, 1964 10 degree", 0.34896556, 0.35931730, "CIE 015:2018 FL8 SPD + CIE 1964 CMFs"},
+  {"CIE FL9, 1931 2 degree", 0.37409927, 0.37268420, "CIE 015:2018 FL9 SPD + CIE 1931 CMFs"},
+  {"CIE FL9, 1964 10 degree", 0.37825426, 0.37038210, "CIE 015:2018 FL9 SPD + CIE 1964 CMFs"},
+  {"CIE FL10, 1931 2 degree", 0.34578790, 0.35875793, "CIE 015:2018 FL10 SPD + CIE 1931 CMFs"},
+  {"CIE FL10, 1964 10 degree", 0.35061017, 0.35430334, "CIE 015:2018 FL10 SPD + CIE 1964 CMFs"},
+  {"CIE FL11, 1931 2 degree", 0.38053749, 0.37691531, "CIE 015:2018 FL11 SPD + CIE 1931 CMFs"},
+  {"CIE FL11, 1964 10 degree", 0.38543539, 0.37109479, "CIE 015:2018 FL11 SPD + CIE 1964 CMFs"},
+  {"CIE FL12, 1931 2 degree", 0.43702434, 0.40421500, "CIE 015:2018 FL12 SPD + CIE 1931 CMFs"},
+  {"CIE FL12, 1964 10 degree", 0.44265468, 0.39706106, "CIE 015:2018 FL12 SPD + CIE 1964 CMFs"}
+};
+
+#define N_WHITE_POINTS ((int) (sizeof (white_points) / sizeof (white_points[0])))
+
+int
+main (void) {
+
+  int i, j, k, rgb_index;
   double **p, *w, **pinv, *coeff, **c, **npm, ** npminv;
 
   fprintf (stdout, "\nDerivation of RGB/XYZ Conversion Matrices\n");
@@ -71,12 +224,12 @@ main (int argc, char **argv) {
 
   // Choose RGB color primaries (i.e., RGB colorspace).
   for (;;) {
-    if (rgb_primaries (p) > -1) break;
+    if (rgb_primaries (p, &rgb_index) > -1) break;
   }
 
   // Choose white coordinates.
   for (;;) {
-    if (illum_white (w) > -1) break;
+    if (illum_white (w, rgb_index) > -1) break;
   }
 
   // Show color primaries matrix p.
@@ -90,8 +243,8 @@ main (int argc, char **argv) {
     fprintf (stdout, "\n");
   }
 
-  // Show white color coordinates.
-  fprintf (stdout, "\nWhite coordinates (x y z):\n");
+  // Show selected white chromaticity coordinates.
+  fprintf (stdout, "\nWhite chromaticity coordinates (x y z):\n");
   fprintf (stdout, "%0.4lf %0.4lf %0.4lf\n", w[0], w[1], w[2]);
 
   // Populate white matrix.
@@ -310,59 +463,29 @@ inputtext (char *text) {
   fgets (text, MAXLEN, stdin);
 
   // Remove trailing newline, if there.
-  if ((strnlen(text, MAXLEN) > 0) && (text[strnlen (text, MAXLEN) - 1] == '\n')) {
-    text[strnlen (text, MAXLEN) - 1] = '\0';  // Replace newline with string termination.
+  if ((strlen (text) > 0) && (text[strlen (text) - 1] == '\n')) {
+    text[strlen (text) - 1] = '\0';  // Replace newline with string termination.
   }
 
   return (EXIT_SUCCESS);
 }
 
-// Color primary coordinates for various RGB colorspaces
-// References: Kang, Computational Color Technology (2006)
-//             Pascale, A Review of RGB Color Spaces (2003)
+// Color primary coordinates for RGB spaces and historical RGB primary sets.
+// Returns: -1 if invalid selection, 0 if valid selection.
 int
-rgb_primaries (double **p) {
+rgb_primaries (double **p, int *rgb_index) {
 
-  int choice;
-  double xr, yr, zr, xg, yg, zg, xb, yb, zb;
+  int choice, i;
+  double zr, zg, zb;
   char *temp, *endptr;
+  const RGBSpace *space;
 
-  // Allocate memory for various arrays.
   temp = allocate_strmem (MAXLEN);
 
-  fprintf (stdout, "\nChoose RGB colorspace:\n");
-  fprintf (stdout, "  1 - sRGB (BT.709)\n");
-  fprintf (stdout, "  2 - Adobe (1998)\n");
-  fprintf (stdout, "  3 - Apple\n");
-  fprintf (stdout, "  4 - Best\n");
-  fprintf (stdout, "  5 - Beta\n");
-  fprintf (stdout, "  6 - Bruse\n");
-  fprintf (stdout, "  7 - CIE 2-deg observer\n");
-  fprintf (stdout, "  8 - CIE 10-deg observer\n");
-  fprintf (stdout, "  9 - ColorMatch\n");
-  fprintf (stdout, " 10 - Don 4\n");
-  fprintf (stdout, " 11 - EBU\n");
-  fprintf (stdout, " 12 - ECI v2\n");
-  fprintf (stdout, " 13 - Ekta Space PS5\n");
-  fprintf (stdout, " 14 - Eureka\n");
-  fprintf (stdout, " 15 - Extended\n");
-  fprintf (stdout, " 16 - Guild\n");
-  fprintf (stdout, " 17 - Ink-jet\n");
-  fprintf (stdout, " 18 - Judd-Wyszecki\n");
-  fprintf (stdout, " 19 - Kress\n");
-  fprintf (stdout, " 20 - Laser (Starkweather)\n");
-  fprintf (stdout, " 21 - NTSC (1953)\n");
-  fprintf (stdout, " 22 - PAL / SECAM\n");
-  fprintf (stdout, " 23 - ProPhoto\n");
-  fprintf (stdout, " 24 - RIMM-ROMM\n");
-  fprintf (stdout, " 25 - ROM\n");
-  fprintf (stdout, " 26 - SGI\n");
-  fprintf (stdout, " 27 - SMPTE-C (NTSC 1987)\n");
-  fprintf (stdout, " 28 - SMPTE-240M\n");
-  fprintf (stdout, " 29 - Sony P-22\n");
-  fprintf (stdout, " 30 - Wide-Gamut\n");
-  fprintf (stdout, " 31 - Wright\n");
-  fprintf (stdout, " 32 - Usami\n");
+  fprintf (stdout, "\nChoose RGB color space / primary set:\n");
+  for (i=0; i<N_RGB_SPACES; i++) {
+    fprintf (stdout, " %2d - %s [%s]\n", i + 1, rgb_spaces[i].name, rgb_spaces[i].source_quality);
+  }
 
   fprintf (stdout, "\nChoice? ");
   inputtext (temp);
@@ -372,314 +495,72 @@ rgb_primaries (double **p) {
     fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
     exit (EXIT_FAILURE);
   }
-  switch (choice) {
-
-    // sRGB (BT.709)
-    case 1:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.3000; yg = 0.6000;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // Adobe (1998)
-    case 2:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // Apple
-    case 3:
-      xr = 0.6250; yr = 0.3400;
-      xg = 0.2800; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // Best
-    case 4:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.2150; yg = 0.7750;
-      xb = 0.1300; yb = 0.0350;
-      break;
-
-    // Beta
-    case 5:
-      xr = 0.6888; yr = 0.3112;
-      xg = 0.1986; yg = 0.7551;
-      xb = 0.1265; yb = 0.0352;
-      break;
-
-    // Bruse
-    case 6:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2800; yg = 0.6500;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // CIE 2-deg observer
-    case 7:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.2737; yg = 0.7174;
-      xb = 0.1665; yb = 0.0089;
-      break;
-
-    // CIE 10-deg observer
-    case 8:
-      xr = 0.7232; yr = 0.2768;
-      xg = 0.1248; yg = 0.8216;
-      xb = 0.1616; yb = 0.0134;
-      break;
-
-    // ColorMatch
-    case 9:
-      xr = 0.6300; yr = 0.3400;
-      xg = 0.2950; yg = 0.6050;
-      xb = 0.1500; yb = 0.0750;
-      break;
-
-    // Don
-    case 10:
-      xr = 0.6960; yr = 0.3000;
-      xg = 0.2150; yg = 0.7650;
-      xb = 0.1300; yb = 0.0350;
-      break;
-
-    // EBU
-    case 11:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2900; yg = 0.6000;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // ECI v2
-    case 12:
-      xr = 0.6700; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1400; yb = 0.0800;
-      break;
-
-    // Ekta Space PS5
-    case 13:
-      xr = 0.6950; yr = 0.3050;
-      xg = 0.2600; yg = 0.7000;
-      xb = 0.1100; yb = 0.0050;
-      break;
-
-    // Eureka
-    case 14:
-      xr = 0.6915; yr = 0.3083;
-      xg = 0.0000; yg = 1.0000;
-      xb = 0.1440; yb = 0.0296;
-      break;
-
-    // Extended
-    case 15:
-      xr = 0.7010; yr = 0.2990;
-      xg = 0.1700; yg = 0.7960;
-      xb = 0.1310; yb = 0.0460;
-      break;
-
-    // Guild
-    case 16:
-      xr = 0.7000; yr = 0.3000;
-      xg = 0.2550; yg = 0.7200;
-      xb = 0.1500; yb = 0.0500;
-      break;
-
-    // Ink-jet
-    case 17:
-      xr = 0.7000; yr = 0.3000;
-      xg = 0.2500; yg = 0.7200;
-      xb = 0.1300; yb = 0.0500;
-      break;
-
-    // Judd-Wyszecki
-    case 18:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.0743; yg = 0.8338;
-      xb = 0.1741; yb = 0.0050;
-      break;
-
-    // Kress
-    case 19:
-      xr = 0.6915; yr = 0.3083;
-      xg = 0.1547; yg = 0.8059;
-      xb = 0.1440; yb = 0.0297;
-      break;
-
-    // Laser (Starkweather)
-    case 20:
-      xr = 0.7117; yr = 0.2882;
-      xg = 0.0328; yg = 0.8029;
-      xb = 0.1632; yb = 0.0119;
-      break;
-
-    // NTSC (1953)
-    case 21:
-      xr = 0.6700; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1400; yb = 0.0800;
-      break;
-
-    // PAL / SECAM
-    case 22:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2900; yg = 0.6000;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // ProPhoto
-    case 23:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.1596; yg = 0.8404;
-      xb = 0.0366; yb = 0.0001;
-      break;
-
-    // RIMM-ROMM
-    case 24:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.1596; yg = 0.8404;
-      xb = 0.0366; yb = 0.0001;
-      break;
-
-    // ROM
-    case 25:
-      xr = 0.8730; yr = 0.1440;
-      xg = 0.1750; yg = 0.9270;
-      xb = 0.0850; yb = 0.0001;
-      break;
-
-    // SGI
-    case 26:
-      xr = 0.6250; yr = 0.3400;
-      xg = 0.2800; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // SMPTE-C (NTSC 1987)
-    case 27:
-      xr = 0.6300; yr = 0.3400;
-      xg = 0.3100; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // SMPTE-240M
-    case 28:
-      xr = 0.6700; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // Sony P-22
-    case 29:
-      xr = 0.6250; yr = 0.3400;
-      xg = 0.2800; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // Wide-Gamut
-    case 30:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.1152; yg = 0.8264;
-      xb = 0.1566; yb = 0.0177;
-      break;
-
-    // Wright
-    case 31:
-      xr = 0.7260; yr = 0.2740;
-      xg = 0.1547; yg = 0.8059;
-      xb = 0.1440; yb = 0.0297;
-      break;
-
-    // Usami
-    case 32:
-      xr = 0.7347; yr = 0.2653;
-      xg = -0.086; yg = 1.0860;
-      xb = 0.0957; yb = -.0314;
-      break;
-
-    // Unknown
-    default:
-      fprintf (stderr, "Invalid choice.\n");
-      return (-1);
+  if ((choice < 1) || (choice > N_RGB_SPACES)) {
+    fprintf (stderr, "Invalid choice.\n");
+    free (temp);
+    return (-1);
   }
 
-  // Compute z chromaticity coordinate of color primaries.
-  zr = 1.0 - xr - yr;
-  zg = 1.0 - xg - yg;
-  zb = 1.0 - xb - yb;
+  *rgb_index = choice - 1;
+  space = &rgb_spaces[*rgb_index];
 
-  // Populate color primaries matrix p.
-  p[0][0] = xr;  p[0][1] = xg;  p[0][2] = xb;
-  p[1][0] = yr;  p[1][1] = yg;  p[1][2] = yb;
-  p[2][0] = zr;  p[2][1] = zg;  p[2][2] = zb;
+  zr = 1.0 - space->xr - space->yr;
+  zg = 1.0 - space->xg - space->yg;
+  zb = 1.0 - space->xb - space->yb;
 
-  // Free allocated memory.
+  p[0][0] = space->xr;  p[0][1] = space->xg;  p[0][2] = space->xb;
+  p[1][0] = space->yr;  p[1][1] = space->yg;  p[1][2] = space->yb;
+  p[2][0] = zr;         p[2][1] = zg;         p[2][2] = zb;
+
+  fprintf (stdout, "\nSelected primary set: %s\n", space->name);
+  fprintf (stdout, "Data basis: %s\n", space->source_note);
+  if (space->native_white_known) {
+    fprintf (stdout, "Suggested native/reference white: %s, x = %.8lf, y = %.8lf\n",
+             space->native_white_name, space->xw, space->yw);
+  } else {
+    fprintf (stdout, "Suggested native/reference white: none established by the source used.\n");
+    fprintf (stdout, "Choose a white deliberately; changing the white changes the normalized primary matrix.\n");
+  }
+
   free (temp);
-
-  return (0);  // Success
+  return (0);
 }
 
 // Illuminants - Choose white point.
-// Returns: -1 if invalid selection, 0 if valid selection
-
-// References: 1. Danny Pascale, "A Review of RGB color spaces", Babel Color
-//             2. Equivalent White Light Sources, and CIE Illuminants, HunterLab
-//             3. CIE F-series Spectral Data, CIE 15.2:1986
-//             4. Colorimetry, 4th Edition, CIE 015:2018, DOI: 10.25039/TR.015.2018
-//             5. Tooms - Colour Reproduction in Electronic Imaging Stsrems (2015)
+// Choice 0, when available, uses the selected RGB space's own defining/native
+// white coordinates.  The numbered general illuminant choices are independent
+// colorimetric values and may contain more digits than a standardized RGB
+// encoding's nominal reference white.
+// Returns: -1 if invalid selection, 0 if valid selection.
 int
-illum_white (double *white_xyz) {
+illum_white (double *white_xyz, int rgb_index) {
 
-  int choice;
+  int choice, i;
   char *temp, *endptr;
+  const RGBSpace *space;
+  const WhitePoint *wp;
 
-  // Allocate memory for various arrays.
+  if ((rgb_index < 0) || (rgb_index >= N_RGB_SPACES)) {
+    fprintf (stderr, "ERROR: Invalid RGB-space index in illum_white().\n");
+    return (-1);
+  }
+
+  space = &rgb_spaces[rgb_index];
   temp = allocate_strmem (MAXLEN);
 
-  fprintf (stdout, "\nChoose display white point for bitmap:\n");
-  fprintf (stdout, "  1 - D65 1931 2-deg - 6504 K - Noon daylight (sRGB, BT.601, BT.709)\n");
-  fprintf (stdout, "  2 - D65 1964 10-deg - 6504 K - Noon daylight\n");
-  fprintf (stdout, "  3 - D50 1931 2-deg - 5003 K - Late afternoon\n");
-  fprintf (stdout, "  4 - D50 1964 10-deg - 5003 K - Late afternoon\n");
-  fprintf (stdout, "  5 - A 1931 2-deg - 2856 K - Tungsten filament\n");
-  fprintf (stdout, "  6 - A 1964 10-deg - 2856 K - Tungsten filament\n");
-  fprintf (stdout, "  7 - B 1931 2-deg - 4874 K - Noon daylight (obsolete)\n");
-  fprintf (stdout, "  8 - C 1931 2-deg - 6774 K - Average daylight\n");
-  fprintf (stdout, "  9 - C 1964 10-deg - 6774 K - Average daylight\n");
-  fprintf (stdout, " 10 - D55 1931 2-deg - 5503 K - Mid-morning / Mid-afternoon\n");
-  fprintf (stdout, " 11 - D55 1964 10-deg - 5503 K - Mid-morning / Mid-afternoon\n");
-  fprintf (stdout, " 12 - D60 1931 2-deg - 5985 K - Daylight\n");
-  fprintf (stdout, " 13 - D75 1931 2-deg - 7504 K - Northern daylight\n");
-  fprintf (stdout, " 14 - D75 1964 10-deg - 7504 K - Northern daylight\n");
-  fprintf (stdout, " 15 - D93 1931 2-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC\n");
-  fprintf (stdout, " 16 - D93 1964 10-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC\n");
-  fprintf (stdout, " 17 - E 1931 2-deg - 5454 K - Equal energy\n");
-  fprintf (stdout, " 18 - E 1964 10-deg - 5454 K - Equal energy\n");
-  fprintf (stdout, " 19 - F1 1931 2-deg - 6430 K - Florescent daylight\n");
-  fprintf (stdout, " 20 - F1 1964 10-deg - 6430 K - Florescent daylight\n");
-  fprintf (stdout, " 21 - F2 1931 2-deg - 4230 K - Cool white fluorescent\n");
-  fprintf (stdout, " 22 - F2 1964 10-deg - 4230 K - Cool white fluorescent\n");
-  fprintf (stdout, " 23 - F3 1931 2-deg - 3450 K - White fluorescent\n");
-  fprintf (stdout, " 24 - F3 1964 10-deg - 3450 K - White fluorescent\n");
-  fprintf (stdout, " 25 - F4 1931 2-deg - 2940 K - Warm white fluorescent\n");
-  fprintf (stdout, " 26 - F4 1964 10-deg - 2940 K - Warm white fluorescent\n");
-  fprintf (stdout, " 27 - F5 1931 2-deg - 6350 K - Daylight fluorescent\n");
-  fprintf (stdout, " 28 - F5 1964 10-deg - 6350 K - Daylight fluorescent\n");
-  fprintf (stdout, " 29 - F6 1931 2-deg - 4150 K - Light white fluorescent\n");
-  fprintf (stdout, " 30 - F6 1964 10-deg - 4150 K - Light white fluorescent\n");
-  fprintf (stdout, " 31 - F7 1931 2-deg - 6500 K - D65 daylight simulator\n");
-  fprintf (stdout, " 32 - F7 1964 10-deg - 6500 K - D65 daylight simulator\n");
-  fprintf (stdout, " 33 - F8 1931 2-deg - 5000 K - D50 simulator, Sylvania F40 Design 50\n");
-  fprintf (stdout, " 34 - F8 1964 10-deg - 5000 K - D50 simulator, Sylvania F40 Design 50\n");
-  fprintf (stdout, " 35 - F9 1931 2-deg - 4150 K - Cool white deluxe fluorescent\n");
-  fprintf (stdout, " 36 - F9 1964 10-deg - 4150 K - Cool white deluxe fluorescent\n");
-  fprintf (stdout, " 37 - F10 1931 2-deg - 5000 K - Philips TL85, Ultralume 50\n");
-  fprintf (stdout, " 38 - F10 1964 10-deg - 5000 K - Philips TL85, Ultralume 50\n");
-  fprintf (stdout, " 39 - F11 1931 2-deg - 4000 K - Philips TL84, Ultralume 40\n");
-  fprintf (stdout, " 40 - F11 1964 10-deg - 4000 K - Philips TL84, Ultralume 40\n");
-  fprintf (stdout, " 41 - F12 1931 2-deg - 3000 K - Philips TL83, Ultralume 30\n");
-  fprintf (stdout, " 42 - F12 1964 10-deg - 3000 K - Philips TL83, Ultralume 30\n");
+  fprintf (stdout, "\nChoose white point:\n");
+  if (space->native_white_known) {
+    fprintf (stdout, "  0 - RECOMMENDED for %s: %s (x=%.8lf, y=%.8lf)\n",
+             space->name, space->native_white_name, space->xw, space->yw);
+  } else {
+    fprintf (stdout, "  0 - unavailable: this primary set has no established native/reference white in the source used\n");
+  }
+
+  for (i=0; i<N_WHITE_POINTS; i++) {
+    fprintf (stdout, " %2d - %s (x=%.8lf, y=%.8lf)\n",
+             i + 1, white_points[i].name, white_points[i].x, white_points[i].y);
+  }
+
   fprintf (stdout, "\nChoice? ");
   inputtext (temp);
   errno = 0;
@@ -688,312 +569,31 @@ illum_white (double *white_xyz) {
     fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
     exit (EXIT_FAILURE);
   }
-  switch (choice) {
 
-    // D65 1931 2-deg - 6504 K - Noon daylight, BT.601, BT.709, sRGB
-    // This is the sRGB standard white.
-    case 1:
-      white_xyz[0] = 0.31272;  // x
-      white_xyz[1] = 0.32903;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D65 1964 10-deg - 6504 K - Noon daylight
-    case 2:
-      white_xyz[0] = 0.31382;  // x
-      white_xyz[1] = 0.33100;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D50 1931 2-deg - 5003 K - Late afternoon
-    case 3:
-      white_xyz[0] = 0.34567;  // x
-      white_xyz[1] = 0.35850;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D50 1964 10-deg - 5003 K - Late afternoon
-    case 4:
-      white_xyz[0] = 0.34773;  // x
-      white_xyz[1] = 0.35952;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // A 1931 2-deg - 2856 K - Tungsten filament
-    case 5:
-      white_xyz[0] = 0.44758;  // x
-      white_xyz[1] = 0.40745;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // A 1964 10-deg - 2856 K - Tungsten filament
-    case 6:
-      white_xyz[0] = 0.45117;  // x
-      white_xyz[1] = 0.40594;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // B 1931 2-deg - 4874 K - Noon daylight (obsolete)
-    case 7:
-      white_xyz[0] = 0.34830;  // x
-      white_xyz[1] = 0.35160;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // C 1931 2-deg - 6774 K - Average daylight
-    case 8:
-      white_xyz[0] = 0.31006;  // x
-      white_xyz[1] = 0.31615;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // C 1964 10-deg - 6774 K - Average daylight
-    case 9:
-      white_xyz[0] = 0.31039;  // x
-      white_xyz[1] = 0.31905;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D55 1931 2-deg - 5503 K - Mid-morning / Mid-afternoon
-    case 10:
-      white_xyz[0] = 0.33242;  // x
-      white_xyz[1] = 0.34743;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D55 1964 10-deg - 5503 K - Mid-morning / Mid-afternoon
-    case 11:
-      white_xyz[0] = 0.33411;  // x
-      white_xyz[1] = 0.34877;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D60 1931 2-deg - 5985 K - Daylight
-    case 12:
-      white_xyz[0] = 0.3217;
-      white_xyz[1] = 0.3377;
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D75 1931 2-deg - 7504 K - Northern daylight
-    case 13:
-      white_xyz[0] = 0.29902;  // x
-      white_xyz[1] = 0.31485;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D75 1964 10-deg - 7504 K - Northern daylight
-    case 14:
-      white_xyz[0] = 0.29968;  // x
-      white_xyz[1] = 0.31740;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D93 1931 2-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC
-    case 15:
-      white_xyz[0] = 0.28315;  // x
-      white_xyz[1] = 0.29711;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D93 1964 10-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC
-    case 16:
-      white_xyz[0] = 0.28327;  // x
-      white_xyz[1] = 0.30043;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // E 1931 2-deg - 5454 K - Equal energy
-    case 17:
-      white_xyz[0] = 0.33333;  // x
-      white_xyz[1] = 0.33333;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // E 1964 10-deg - 5454 K - Equal energy
-    case 18:
-      white_xyz[0] = 0.33333;  // x
-      white_xyz[1] = 0.33333;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F1 1931 2-deg - 6430 K - Florescent daylight
-    case 19:
-      white_xyz[0] = 0.31310;  // x
-      white_xyz[1] = 0.33727;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F1 1964 10-deg - 6430 K - Florescent daylight
-    case 20:
-      white_xyz[0] = 0.31811;  // x
-      white_xyz[1] = 0.33559;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F2 1931 2-deg - 4230 K - Cool white fluorescent
-    case 21:
-      white_xyz[0] = 0.37208;  // x
-      white_xyz[1] = 0.37529;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F2 1964 10-deg - 4230 K - Cool white fluorescent
-    case 22:
-      white_xyz[0] = 0.37925;  // x
-      white_xyz[1] = 0.36733;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F3 1931 2-deg - 3450 K - White fluorescent
-    case 23:
-      white_xyz[0] = 0.40910;  // x
-      white_xyz[1] = 0.39430;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F3 1964 10-deg - 3450 K - White fluorescent
-    case 24:
-      white_xyz[0] = 0.41761;  // x
-      white_xyz[1] = 0.38324;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F4 1931 2-deg - 2940 K - Warm white fluorescent
-    case 25:
-      white_xyz[0] = 0.44018;  // x
-      white_xyz[1] = 0.40329;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F4 1964 10-deg - 2940 K - Warm white fluorescent
-    case 26:
-      white_xyz[0] = 0.44920;  // x
-      white_xyz[1] = 0.39074;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F5 1931 2-deg - 6350 K - Daylight fluorescent
-    case 27:
-      white_xyz[0] = 0.31379;  // x
-      white_xyz[1] = 0.34531;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F5 1964 10-deg - 6350 K - Daylight fluorescent
-    case 28:
-      white_xyz[0] = 0.31975;  // x
-      white_xyz[1] = 0.34246;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F6 1931 2-deg - 4150 K - Light white fluorescent
-    case 29:
-      white_xyz[0] = 0.37790;  // x
-      white_xyz[1] = 0.38835;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F6 1964 10-deg - 4150 K - Light white fluorescent
-    case 30:
-      white_xyz[0] = 0.38660;  // x
-      white_xyz[1] = 0.37847;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F7 1931 2-deg - 6500 K - D65 daylight simulator
-    case 31:
-      white_xyz[0] = 0.31292;  // x
-      white_xyz[1] = 0.32933;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F7 1964 10-deg - 6500 K - D65 daylight simulator
-    case 32:
-      white_xyz[0] = 0.31569;  // x
-      white_xyz[1] = 0.32960;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F8 1931 2-deg - 5000 K - D50 simulator, Sylvania F40 Design 50
-    case 33:
-      white_xyz[0] = 0.34588;  // x
-      white_xyz[1] = 0.35875;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F8 1964 10-deg - 5000 K - D50 simulator, Sylvania F40 Design 50
-    case 34:
-      white_xyz[0] = 0.34902;  // x
-      white_xyz[1] = 0.35939;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F9 1931 2-deg - 4150 K - Cool white deluxe fluorescent
-    case 35:
-      white_xyz[0] = 0.37417;  // x
-      white_xyz[1] = 0.37281;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F9 1964 10-deg - 4150 K - Cool white deluxe fluorescent
-    case 36:
-      white_xyz[0] = 0.37829;  // x
-      white_xyz[1] = 0.37045;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F10 1931 2-deg - 5000 K - Philips TL85, Ultralume 50
-    case 37:
-      white_xyz[0] = 0.34609;  // x
-      white_xyz[1] = 0.35986;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F10 1964 10-deg - 5000 K - Philips TL85, Ultralume 50
-    case 38:
-      white_xyz[0] = 0.35090;  // x
-      white_xyz[1] = 0.35444;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F11 1931 2-deg - 4000 K - Philips TL84, Ultralume 40
-    case 39:
-      white_xyz[0] = 0.38052;  // x
-      white_xyz[1] = 0.37713;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F11 1964 10-deg - 4000 K - Philips TL84, Ultralume 40
-    case 40:
-      white_xyz[0] = 0.38541;  // x
-      white_xyz[1] = 0.37123;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F12 1931 2-deg - 3000 K - Philips TL83, Ultralume 30
-    case 41:
-      white_xyz[0] = 0.43695;  // x
-      white_xyz[1] = 0.40441;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F12 1964 10-deg - 3000 K - Philips TL83, Ultralume 30
-    case 42:
-      white_xyz[0] = 0.44256;  // x
-      white_xyz[1] = 0.39717;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    default:
-      fprintf (stderr, "Invalid selection.\n");
+  if (choice == 0) {
+    if (!space->native_white_known) {
+      fprintf (stderr, "No native/reference white is established for %s in the source used.\n", space->name);
+      free (temp);
       return (-1);
+    }
+    white_xyz[0] = space->xw;
+    white_xyz[1] = space->yw;
+    fprintf (stdout, "Using defining/native white for %s: %s.\n", space->name, space->native_white_name);
+  } else if ((choice >= 1) && (choice <= N_WHITE_POINTS)) {
+    wp = &white_points[choice - 1];
+    white_xyz[0] = wp->x;
+    white_xyz[1] = wp->y;
+    fprintf (stdout, "Using %s.\nData basis: %s\n", wp->name, wp->source_note);
+  } else {
+    fprintf (stderr, "Invalid selection.\n");
+    free (temp);
+    return (-1);
   }
 
-  // Free allocated memory.
-  free (temp);
+  white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];
 
-  return (0);  // Success
+  free (temp);
+  return (0);
 }
 
 // Allocate memory for an array of ints.
@@ -1007,9 +607,8 @@ allocate_intmem (int len) {
     exit (EXIT_FAILURE);
   }
 
-  tmp = (int *) malloc (len * sizeof (int));
+  tmp = calloc (len, sizeof (int));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (int));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_intmem().\n");
@@ -1019,18 +618,17 @@ allocate_intmem (int len) {
 
 // Allocate memory for an array of doubles.
 double *
-allocate_doublemem (int len)
-{ 
+allocate_doublemem (int len) {
+
   void *tmp;
-  
+
   if (len <= 0) { 
     fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublemem().\n", len);
     exit (EXIT_FAILURE);
   }
-  
-  tmp = (double *) malloc (len * sizeof (double));
+
+  tmp = calloc (len, sizeof (double));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (double));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublemem().\n");
@@ -1040,18 +638,17 @@ allocate_doublemem (int len)
   
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
-allocate_doublememp (int len)
-{ 
+allocate_doublememp (int len) {
+
   void *tmp;
-  
+
   if (len <= 0) {
     fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublememp().\n", len);
     exit (EXIT_FAILURE);
   }
-  
-  tmp = (double **) malloc (len * sizeof (double *));
+
+  tmp = calloc (len, sizeof (double *));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (double *));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublememp().\n");
@@ -1064,15 +661,14 @@ char *
 allocate_strmem (int len) {
 
   void *tmp;
-    
+
   if (len <= 0) {
     fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_strmem().\n", len);
     exit (EXIT_FAILURE);
   }
-  
-  tmp = (char *) malloc (len * sizeof (char));
+
+  tmp = calloc (len, sizeof (char));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (char));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_strmem().\n");

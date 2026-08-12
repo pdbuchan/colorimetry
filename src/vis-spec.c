@@ -1139,9 +1139,8 @@ allocate_intmem (int len) {
     exit (EXIT_FAILURE);
   }
 
-  tmp = (int *) malloc (len * sizeof (int));
+  tmp = calloc (len, sizeof (int));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (int));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_intmem().\n");
@@ -1152,17 +1151,16 @@ allocate_intmem (int len) {
 // Allocate memory for an array of chars.
 char *
 allocate_strmem (int len) {
-  
+
   void *tmp;
-    
+
   if (len <= 0) {
     fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_strmem().\n", len);
     exit (EXIT_FAILURE);
   }
-  
-  tmp = (char *) malloc (len * sizeof (char));
+
+  tmp = calloc (len, sizeof (char));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (char));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_strmem().\n");
@@ -1172,18 +1170,17 @@ allocate_strmem (int len) {
 
 // Allocate memory for an array of doubles.
 double *
-allocate_doublemem (int len)
-{ 
+allocate_doublemem (int len) {
+
   void *tmp;
-  
+
   if (len <= 0) { 
     fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublemem().\n", len);
     exit (EXIT_FAILURE);
   }
-    
-  tmp = (double *) malloc (len * sizeof (double));
+
+  tmp = calloc (len, sizeof (double));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (double));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublemem().\n");
@@ -1193,18 +1190,17 @@ allocate_doublemem (int len)
 
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
-allocate_doublememp (int len)
-{   
+allocate_doublememp (int len) {
+
   void *tmp;
-    
+
   if (len <= 0) {
     fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublememp().\n", len);
     exit (EXIT_FAILURE);
   }
 
-  tmp = (double **) malloc (len * sizeof (double *));
+  tmp = calloc (len, sizeof (double *));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (double *));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublememp().\n");
@@ -1215,17 +1211,16 @@ allocate_doublememp (int len)
 // Allocate memory for an array of unsigned chars.
 uint8_t *
 allocate_ustrmem (int len) {
-    
+
   void *tmp;
-  
+
   if (len <= 0) {
     fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_ustrmem().\n", len);
     exit (EXIT_FAILURE);
   }
 
-  tmp = (uint8_t *) malloc (len * sizeof (uint8_t));
+  tmp = calloc (len, sizeof (uint8_t));
   if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (uint8_t));
     return (tmp);
   } else {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_ustrmem().\n");
