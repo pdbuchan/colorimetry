@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="C colorimetry tools for CIE color-matching functions, chromaticity, RGB/XYZ matrices, wavelengths, and visible-spectrum rendering.">
+  <title>Colorimetry</title>
+  <link rel="stylesheet" href="assets/colorimetry.css">
+</head>
+<body>
+  <header class="site-header">
+    <h1>Colorimetry</h1>
+    <p class="subtitle">CIE color-matching functions, chromaticity, and RGB/XYZ conversion from first principles</p>
+    <p><a href="https://github.com/pdbuchan/colorimetry">GitHub repository</a></p>
+  </header>
+
+  <main>
+    <section>
+      <h2>Project overview</h2>
+      <p>After working on <a href="https://github.com/pdbuchan/subtitle-tools/tree/main/pgs">PGS subtitle extraction</a>, which involves conversion of BT.709 YCbCr to the sRGB color space, I continued investigating other aspects of colorimetry. This project contains C-language tools developed during that work.</p>
+
+      <p>The intent is to work from first principles to the greatest extent practical. The programs therefore work directly with CIE color-matching functions (CMFs). The bundled CMF data were obtained from the <a href="http://www.cvrl.org/">Colour &amp; Vision Research Laboratory (CVRL)</a>.</p>
+
+      <p>For display on a typical computer monitor, sRGB uses the D65 white point and the same RGB chromaticity primaries as BT.709. The programs can apply the sRGB transfer function to linear RGB values where appropriate. Other RGB primaries and white points are available in some programs for comparison and experimentation.</p>
+
+      <p>The original CIE 1931 standard observer was based on a 2&deg; field of view. Because cone distribution across the retina is not uniform, the CIE later standardized a 10&deg; observer in 1964 for applications involving a larger field of view.</p>
+
+      <aside class="note">
+        <strong>Important gamut limitation:</strong> monochromatic stimuli on the spectral locus cannot, in general, be reproduced exactly in sRGB because their chromaticities lie outside the sRGB gamut triangle. An sRGB image of the visible spectrum is therefore only a display approximation. The same limitation applies when a chromaticity diagram fills regions outside the sRGB triangle with sRGB pixel values.
+      </aside>
+    </section>
+
+    <section>
+      <h2>Programs</h2>
+      <div class="program-grid">
+        <article>
+          <h3><a href="https://github.com/pdbuchan/colorimetry/blob/main/src/locus.c"><code>locus.c</code></a></h3>
+          <p>Produces a bitmap of the chromaticity locus for a selected CMF. It can also plot an RGB-gamut outline, fill the sRGB gamut, mark a white point, and add axes.</p>
+        </article>
+
+        <article>
+          <h3><a href="https://github.com/pdbuchan/colorimetry/blob/main/src/matrix.c"><code>matrix.c</code></a></h3>
+          <p>Derives RGB-to-XYZ and XYZ-to-RGB conversion matrices for a selected RGB color space and white point.</p>
+        </article>
+
+        <article>
+          <h3><a href="https://github.com/pdbuchan/colorimetry/blob/main/src/wl.c"><code>wl.c</code></a></h3>
+          <p>Reports CMF tristimulus values, spectral chromaticity coordinates, and corresponding sRGB values for a selected wavelength.</p>
+        </article>
+
+        <article>
+          <h3><a href="https://github.com/pdbuchan/colorimetry/blob/main/src/vis-spec.c"><code>vis-spec.c</code></a></h3>
+          <p>Produces an sRGB bitmap approximation of the visible spectrum using a selected CMF and white point.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Color-matching-function data</h2>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Dataset</th>
+              <th scope="col">Range</th>
+              <th scope="col">Sampling</th>
+              <th scope="col">File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>CIE 1931 2&deg; XYZ CMFs</td>
+              <td>360&ndash;830 nm</td>
+              <td>1 nm</td>
+              <td><a href="https://github.com/pdbuchan/colorimetry/blob/main/data/CIE_xyz_1931_2deg.csv"><code>CIE_xyz_1931_2deg.csv</code></a></td>
+            </tr>
+            <tr>
+              <td>CIE 1931 2&deg; XYZ CMFs, Judd (1951)</td>
+              <td>370&ndash;770 nm</td>
+              <td>10 nm</td>
+              <td><a href="https://github.com/pdbuchan/colorimetry/blob/main/data/CIE_xyz_1931_2deg_judd1951.csv"><code>CIE_xyz_1931_2deg_judd1951.csv</code></a></td>
+            </tr>
+            <tr>
+              <td>CIE 1931 2&deg; XYZ CMFs, Judd (1951) + Vos (1978)</td>
+              <td>380&ndash;825 nm</td>
+              <td>5 nm</td>
+              <td><a href="https://github.com/pdbuchan/colorimetry/blob/main/data/CIE_xyz_1931_2deg_judd1951_vos1978.csv"><code>CIE_xyz_1931_2deg_judd1951_vos1978.csv</code></a></td>
+            </tr>
+            <tr>
+              <td>CIE 1964 10&deg; XYZ CMFs</td>
+              <td>360&ndash;830 nm</td>
+              <td>1 nm</td>
+              <td><a href="https://github.com/pdbuchan/colorimetry/blob/main/data/CIE_xyz_1964_10deg.csv"><code>CIE_xyz_1964_10deg.csv</code></a></td>
+            </tr>
+            <tr>
+              <td>2006 2&deg; XYZ CMFs from CIE 2006 LMS fundamentals</td>
+              <td>390&ndash;830 nm</td>
+              <td>0.1 nm</td>
+              <td><a href="https://github.com/pdbuchan/colorimetry/blob/main/data/CIE_xyz_2006_2deg_lms_cones.csv"><code>CIE_xyz_2006_2deg_lms_cones.csv</code></a></td>
+            </tr>
+            <tr>
+              <td>2006 10&deg; XYZ CMFs from CIE 2006 LMS fundamentals</td>
+              <td>390&ndash;830 nm</td>
+              <td>0.1 nm</td>
+              <td><a href="https://github.com/pdbuchan/colorimetry/blob/main/data/CIE_xyz_2006_10deg_lms_cones.csv"><code>CIE_xyz_2006_10deg_lms_cones.csv</code></a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Each CSV row contains wavelength in nanometres followed by x&#772;, y&#772;, and z&#772;. There is no header row.</p>
+    </section>
+
+    <section>
+      <h2>Building and running</h2>
+      <p>On a system with GCC and <code>make</code>, clone the repository and run:</p>
+      <pre><code>make</code></pre>
+      <p>The Makefile builds <code>locus</code>, <code>matrix</code>, <code>vis-spec</code>, and <code>wl</code> in the repository root. The programs are interactive; for example:</p>
+      <pre><code>./wl</code></pre>
+      <p>The CMF-reading programs use the files under <code>data/</code> for their built-in choices. <code>locus</code> and <code>vis-spec</code> write <code>out.bmp</code> and refuse to overwrite an existing file of that name.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>Software source: GNU GPL version 3 or later. CMF data provenance and redistribution terms are described in the repository documentation.</p>
+  </footer>
+</body>
+</html>

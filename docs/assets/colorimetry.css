@@ -1,0 +1,162 @@
+/* Shared stylesheet for the Colorimetry project. */
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color: #ffffff;
+  background-color: #000000;
+  font-size: 100%;
+}
+
+body {
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 1.5rem 2rem 4rem;
+  color: #ffffff;
+  background-color: #000000;
+  font-family: "Open Sans", Arial, Helvetica, sans-serif;
+  font-size: 14pt;
+  font-weight: 300;
+  line-height: 1.55;
+}
+
+a,
+a:link {
+  color: #66b3ff;
+}
+
+a:visited {
+  color: #c58cff;
+}
+
+a:hover,
+a:focus-visible {
+  color: #ffffff;
+}
+
+.site-header {
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid #666666;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin-top: 0.4rem;
+  font-size: 1.05rem;
+}
+
+h2 {
+  margin-top: 2.5rem;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+h3 {
+  margin-top: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+p {
+  margin: 0.8rem 0;
+}
+
+.note {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid #666666;
+  border-left: 0.35rem solid #ffffff;
+  background-color: #111111;
+}
+
+.program-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+}
+
+.program-grid article {
+  padding: 1rem;
+  border: 1px solid #555555;
+  background-color: #0d0d0d;
+}
+
+.program-grid article p {
+  margin-bottom: 0;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #666666;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background-color: #181818;
+  font-weight: 600;
+}
+
+code,
+pre {
+  font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+pre {
+  max-width: 100%;
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  border: 1px solid #555555;
+  background-color: #111111;
+}
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid #666666;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 48rem) {
+  body {
+    padding: 1rem;
+    font-size: 12pt;
+  }
+
+  h1 {
+    font-size: 1.7rem;
+  }
+}
