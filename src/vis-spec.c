@@ -488,6 +488,7 @@ main (void) {
 int
 inputtext (char *text) {
 
+  int ch;
   size_t len;
 
   if (fgets (text, MAX_STRINGLEN, stdin) == NULL) {
@@ -496,14 +497,42 @@ inputtext (char *text) {
   }
 
   len = strlen (text);
-  if ((len > 0u) && (text[len - 1u] == '\n')) {
-    text[len - 1u] = '\0';
-  } else if (len == MAX_STRINGLEN - 1u) {
-    int ch;
-    while (((ch = getchar ()) != '\n') && (ch != EOF)) {
-      // Discard the remainder of an overlong input line.
+
+  // Remove trailing newline, and a preceding carriage return if present.
+  if ((len > 0) && (text[len - 1] == '\n')) {
+    text[--len] = '\0';
+    if ((len > 0) && (text[len - 1] == '\r')) {
+      text[--len] = '\0';
     }
-    fprintf (stderr, "Input text is too long; maximum is %d characters.\n", MAX_STRINGLEN - 2);
+    return (EXIT_SUCCESS);
+  }
+
+  // If the buffer is full, determine whether the input was exactly
+  // MAX_STRINGLEN - 1 characters or was genuinely too long.
+  if (len == MAX_STRINGLEN - 1) {
+
+    ch = getchar ();
+
+    // Exactly MAX_STRINGLEN - 1 characters followed by newline or EOF.
+    if ((ch == '\n') || (ch == EOF)) {
+      return (EXIT_SUCCESS);
+    }
+
+    // Handle CRLF after an exactly full input line.
+    if (ch == '\r') {
+      ch = getchar ();
+      if ((ch == '\n') || (ch == EOF)) {
+        return (EXIT_SUCCESS);
+      }
+    }
+
+    // Discard the remainder of an overlong input line.
+    while ((ch != '\n') && (ch != EOF)) {
+      ch = getchar ();
+    }
+
+    fprintf (stderr, "Input text is too long; maximum is %d characters.\n",
+             MAX_STRINGLEN - 1);
     exit (EXIT_FAILURE);
   }
 
