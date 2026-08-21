@@ -26,19 +26,22 @@
 #include <string.h>
 #include <math.h>
 #include <errno.h>
+#include <ctype.h>
+#include <limits.h>
+#include <float.h>
 
 // Function prototypes
 int inputtext (char *);
 int rgb_primaries (double **, int *);
 int illum_white (double *, int);
 int gaussjordan (int, double **);
-int *allocate_intmem (int);
-double *allocate_doublemem (int);
-double **allocate_doublememp (int);
-char *allocate_strmem (int);
+int parse_int_string (const char *, int *);
+double *allocate_doublemem (size_t);
+double **allocate_doublememp (size_t);
+char *allocate_strmem (size_t);
 
 // Set some symbolic constants.
-#define MAXLEN 256  // Maximum number of characters per line
+#define MAX_STRINGLEN 256  // Maximum number of characters per line
 
 typedef struct {
   const char *name;
@@ -196,7 +199,7 @@ static const WhitePoint white_points[] = {
 int
 main (void) {
 
-  int i, j, k, rgb_index;
+  int i, j, rgb_index;
   double **p, *w, **pinv, *coeff, **c, **npm, ** npminv;
 
   fprintf (stdout, "\nDerivation of RGB/XYZ Conversion Matrices\n");
@@ -254,7 +257,10 @@ main (void) {
   w[1] = 1.0;
 
   // Compute inverse of color primaries matrix p.
-  gaussjordan (3, pinv);
+  if (gaussjordan (3, pinv) == EXIT_FAILURE) {
+    fprintf (stderr, "ERROR: Unable to invert color primaries matrix.\n");
+    exit (EXIT_FAILURE);
+  }
 
   // Show inverse of color primaries matrix.
   fprintf (stdout, "\nInverse (pinv) of color primaries matrix:\n");
@@ -310,12 +316,11 @@ double v;
   }
   fprintf (stdout, "\n");
 
-  // Compute NPM matrix, where NPM = P * C
+  // Compute NPM = P * C. Since C is diagonal, each primary column is
+  // simply scaled by its corresponding normalization coefficient.
   for (i=0; i<3; i++) {
     for (j=0; j<3; j++) {
-      for (k=0; k<3; k++) {
-        npm[i][j] += p[i][k] * c[j][k];
-      }
+      npm[i][j] = p[i][j] * coeff[j];
     }
   }
 
@@ -325,7 +330,10 @@ double v;
       npminv[i][j] = npm[i][j];
     }
   }
-  gaussjordan (3, npminv);
+  if (gaussjordan (3, npminv) == EXIT_FAILURE) {
+    fprintf (stderr, "ERROR: Unable to invert normalized primary matrix.\n");
+    exit (EXIT_FAILURE);
+  }
 
   fprintf (stdout, " --- Results ---\n\n");
 
@@ -393,16 +401,25 @@ double v;
 }
 
 // Gauss-Jordan in-place inversion of n*n matrix.
+// Partial pivoting is used so an invertible matrix is not rejected merely
+// because the current diagonal element is zero or very small.
 int
 gaussjordan (int n, double **matrix) {
 
-  int i, j, k;
-  double **augmented, pivot, factor;
+  int i, j, k, pivot_row;
+  double **augmented, pivot, factor, max_abs;
+  double *rowtmp;
 
-  // Allocate memory for various arrays.
-  augmented = allocate_doublememp (n);
+  if ((n <= 0) || (matrix == NULL)) return (EXIT_FAILURE);
+
+  augmented = allocate_doublememp ((size_t) n);
   for (i=0; i<n; i++) {
-    augmented[i] = allocate_doublemem (2 * n);  // Original matrix augmented by identity matrix
+    if (matrix[i] == NULL) {
+      for (j=0; j<i; j++) free (augmented[j]);
+      free (augmented);
+      return (EXIT_FAILURE);
+    }
+    augmented[i] = allocate_doublemem ((size_t) (2 * n));
   }
 
   // Augment the matrix with the identity matrix.
@@ -413,43 +430,50 @@ gaussjordan (int n, double **matrix) {
     }
   }
 
-  // Perform Gauss-Jordan elimination.
+  // Perform Gauss-Jordan elimination with partial pivoting.
   for (i=0; i<n; i++) {
-
-    // Find the pivot element.
-    pivot = augmented[i][i];
-    if (fabs (pivot) < 1e-9) {  // If pivot is too small, the matrix is singular.
-      fprintf (stdout, "ERROR: Singular matrix in gaussjordan().\n");
-      exit (EXIT_FAILURE);
+    pivot_row = i;
+    max_abs = fabs (augmented[i][i]);
+    for (j=i + 1; j<n; j++) {
+      if (fabs (augmented[j][i]) > max_abs) {
+        max_abs = fabs (augmented[j][i]);
+        pivot_row = j;
+      }
     }
 
-    // Normalize the pivot row.
+    if (!isfinite (max_abs) || (max_abs <= DBL_EPSILON * 1024.0)) {
+      for (j=0; j<n; j++) free (augmented[j]);
+      free (augmented);
+      return (EXIT_FAILURE);
+    }
+
+    if (pivot_row != i) {
+      rowtmp = augmented[i];
+      augmented[i] = augmented[pivot_row];
+      augmented[pivot_row] = rowtmp;
+    }
+
+    pivot = augmented[i][i];
     for (j=0; j<(2 * n); j++) {
       augmented[i][j] /= pivot;
     }
 
-    // Eliminate the current column in all rows except the current row.
     for (j=0; j<n; j++) {
-      if (j != i) {
-        factor = augmented[j][i];
-        for (k=0; k<(2 * n); k++) {
-          augmented[j][k] -= factor * augmented[i][k];
-        }
+      if (j == i) continue;
+      factor = augmented[j][i];
+      for (k=0; k<(2 * n); k++) {
+        augmented[j][k] -= factor * augmented[i][k];
       }
     }
   }
 
-  // Copy the right half of the augmented matrix back to the original matrix.
   for (i=0; i<n; i++) {
     for (j=0; j<n; j++) {
       matrix[i][j] = augmented[i][j + n];
     }
   }
 
-  // Free allocated memory.
-  for (i=0; i<n; i++) {
-    free (augmented[i]);
-  }
+  for (i=0; i<n; i++) free (augmented[i]);
   free (augmented);
 
   return (EXIT_SUCCESS);
@@ -459,14 +483,46 @@ gaussjordan (int n, double **matrix) {
 int
 inputtext (char *text) {
 
-  // Request new text from standard input.
-  fgets (text, MAXLEN, stdin);
+  size_t len;
 
-  // Remove trailing newline, if there.
-  if ((strlen (text) > 0) && (text[strlen (text) - 1] == '\n')) {
-    text[strlen (text) - 1] = '\0';  // Replace newline with string termination.
+  if (fgets (text, MAX_STRINGLEN, stdin) == NULL) {
+    fprintf (stderr, "Unable to read text from standard input.\n");
+    exit (EXIT_FAILURE);
   }
 
+  len = strlen (text);
+  if (len > 0 && text[len - 1] == '\n') {
+    text[len - 1] = '\0';
+  } else if (len == MAX_STRINGLEN - 1) {
+    int ch;
+    while ((ch = getchar ()) != '\n' && ch != EOF) {
+      // Discard the remainder of an overlong input line.
+    }
+    fprintf (stderr, "Input text is too long; maximum is %d characters.\n", MAX_STRINGLEN - 2);
+    exit (EXIT_FAILURE);
+  }
+
+  return (EXIT_SUCCESS);
+}
+
+// Convert a complete input string to int, allowing surrounding whitespace only.
+int
+parse_int_string (const char *text, int *value) {
+
+  char *endptr;
+  long parsed;
+
+  if ((text == NULL) || (value == NULL)) return (EXIT_FAILURE);
+
+  errno = 0;
+  parsed = strtol (text, &endptr, 10);
+  if ((errno == ERANGE) || (endptr == text)) return (EXIT_FAILURE);
+  while (isspace ((unsigned char) *endptr)) endptr++;
+  if ((*endptr != '\0') || (parsed < INT_MIN) || (parsed > INT_MAX)) {
+    return (EXIT_FAILURE);
+  }
+
+  *value = (int) parsed;
   return (EXIT_SUCCESS);
 }
 
@@ -477,10 +533,10 @@ rgb_primaries (double **p, int *rgb_index) {
 
   int choice, i;
   double zr, zg, zb;
-  char *temp, *endptr;
+  char *temp;
   const RGBSpace *space;
 
-  temp = allocate_strmem (MAXLEN);
+  temp = allocate_strmem (MAX_STRINGLEN);
 
   fprintf (stdout, "\nChoose RGB color space / primary set:\n");
   for (i=0; i<N_RGB_SPACES; i++) {
@@ -489,11 +545,10 @@ rgb_primaries (double **p, int *rgb_index) {
 
   fprintf (stdout, "\nChoice? ");
   inputtext (temp);
-  errno = 0;
-  choice = (int) strtol (temp, &endptr, 10);
-  if ((errno == ERANGE) || (errno == EINVAL) || (endptr == temp)) {
+  if (parse_int_string (temp, &choice) == EXIT_FAILURE) {
     fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
-    exit (EXIT_FAILURE);
+    free (temp);
+    return (-1);
   }
   if ((choice < 1) || (choice > N_RGB_SPACES)) {
     fprintf (stderr, "Invalid choice.\n");
@@ -536,7 +591,7 @@ int
 illum_white (double *white_xyz, int rgb_index) {
 
   int choice, i;
-  char *temp, *endptr;
+  char *temp;
   const RGBSpace *space;
   const WhitePoint *wp;
 
@@ -546,7 +601,7 @@ illum_white (double *white_xyz, int rgb_index) {
   }
 
   space = &rgb_spaces[rgb_index];
-  temp = allocate_strmem (MAXLEN);
+  temp = allocate_strmem (MAX_STRINGLEN);
 
   fprintf (stdout, "\nChoose white point:\n");
   if (space->native_white_known) {
@@ -563,11 +618,10 @@ illum_white (double *white_xyz, int rgb_index) {
 
   fprintf (stdout, "\nChoice? ");
   inputtext (temp);
-  errno = 0;
-  choice = (int) strtol (temp, &endptr, 10);
-  if ((errno == ERANGE) || (errno == EINVAL) || (endptr == temp)) {
+  if (parse_int_string (temp, &choice) == EXIT_FAILURE) {
     fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
-    exit (EXIT_FAILURE);
+    free (temp);
+    return (-1);
   }
 
   if (choice == 0) {
@@ -596,34 +650,14 @@ illum_white (double *white_xyz, int rgb_index) {
   return (0);
 }
 
-// Allocate memory for an array of ints.
-int *
-allocate_intmem (int len) {
-
-  void *tmp;
-
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_intmem().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (int));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_intmem().\n");
-    exit (EXIT_FAILURE);
-  }
-}
-
 // Allocate memory for an array of doubles.
 double *
-allocate_doublemem (int len) {
+allocate_doublemem (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) { 
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublemem().\n", len);
+  if (len == 0) { 
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublemem().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -638,12 +672,12 @@ allocate_doublemem (int len) {
   
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
-allocate_doublememp (int len) {
+allocate_doublememp (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublememp().\n", len);
+  if (len == 0) {
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublememp().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -658,12 +692,12 @@ allocate_doublememp (int len) {
 
 // Allocate memory for an array of chars.
 char *
-allocate_strmem (int len) {
+allocate_strmem (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_strmem().\n", len);
+  if (len == 0) {
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_strmem().\n", len);
     exit (EXIT_FAILURE);
   }
 

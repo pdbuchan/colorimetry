@@ -1,4 +1,4 @@
-/*  Copyright (C) 2024-2025 P. David Buchan (pdbuchan@gmail.com)
+/*  Copyright (C) 2024-2026 P. David Buchan (pdbuchan@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -34,6 +34,9 @@
 #include <string.h>
 #include <math.h>  // fabs()
 #include <errno.h>
+#include <ctype.h>
+#include <limits.h>
+#include <float.h>
 
 typedef struct {
     uint8_t blue;   // Blue
@@ -41,15 +44,172 @@ typedef struct {
     uint8_t red;    // Red
 } PIXEL;
 
+typedef struct {
+  const char *name;
+  double xr, yr;
+  double xg, yg;
+  double xb, yb;
+  const char *source_quality;
+  const char *source_note;
+  const char *native_white_name;
+  double xw, yw;
+  int native_white_known;
+} RGBSpace;
+
+typedef struct {
+  const char *name;
+  double x, y;
+  const char *source_note;
+} WhitePoint;
+
+/*
+ * Primary coordinates are kept at the precision at which the defining standard,
+ * originating profile, or historical source specifies them.  Do not add digits
+ * merely by substituting a more precise chromaticity for a named illuminant: for
+ * standardized RGB spaces, the reference-white coordinates are part of the RGB
+ * space definition.
+ *
+ * "standard" means a normative standard/registry was available; "originator/profile"
+ * means an originating author or widely distributed defining profile was available;
+ * "historical/secondary" means no normative definition was located and the values
+ * are retained from the Kang/Pascale source set used by the original program.
+ */
+static const RGBSpace rgb_spaces[] = {
+  {"sRGB / ITU-R BT.709", 0.6400,0.3300, 0.3000,0.6000, 0.1500,0.0600,
+   "standard", "IEC 61966-2-1 / ITU-R BT.709", "D65 (space definition)", 0.3127,0.3290, 1},
+  {"Adobe RGB (1998)", 0.6400,0.3300, 0.2100,0.7100, 0.1500,0.0600,
+   "standard", "Adobe RGB (1998) Color Image Encoding", "D65 (space definition)", 0.3127,0.3290, 1},
+  {"Apple RGB", 0.6250,0.3400, 0.2800,0.5950, 0.1550,0.0700,
+   "originator/profile", "legacy Apple/ColorSync profile definition; cross-checked against Adobe profile set", "D65 (legacy profile)", 0.3127,0.3290, 1},
+  {"Best RGB", 0.7347,0.2653, 0.2150,0.7750, 0.1300,0.0350,
+   "originator/profile", "Bruce Lindbloom working-space definition", "D50 (working-space definition)", 0.3457,0.3585, 1},
+  {"Beta RGB", 0.6888,0.3112, 0.1986,0.7551, 0.1265,0.0352,
+   "originator/profile", "Bruce Lindbloom working-space definition", "D50 (working-space definition)", 0.3457,0.3585, 1},
+  {"Bruce RGB", 0.6400,0.3300, 0.2800,0.6500, 0.1500,0.0600,
+   "originator/profile", "Bruce Lindbloom working-space definition", "D65 (working-space definition)", 0.3127,0.3290, 1},
+  {"CIE 1931 RGB (2 degree observer)",
+   0.7346900,0.2653100, 0.2736827,0.7174214, 0.1665347,0.0088840,
+   "historical/derived", "700.0, 546.1 and 435.8 nm primaries evaluated from official CIE 1931 2 degree CMFs", "equal-energy E", 1.0/3.0,1.0/3.0, 1},
+  {"CIE 1964/RGB (legacy secondary table)", 0.7232,0.2768, 0.1248,0.8216, 0.1616,0.0134,
+   "historical/secondary", "retained from Kang; CIE standardized a 10 degree XYZ observer, not this RGB working space", "equal-energy E (historical convention)", 1.0/3.0,1.0/3.0, 1},
+  {"ColorMatch RGB", 0.6300,0.3400, 0.2950,0.6050, 0.1500,0.0750,
+   "originator/profile", "legacy ColorMatch profile definition", "D50 (profile definition)", 0.3457,0.3585, 1},
+  {"Don RGB 4", 0.6960,0.3000, 0.2150,0.7650, 0.1300,0.0350,
+   "originator/profile", "Don Hutcheson / HutchColor working-space definition", "D50 (working-space definition)", 0.3457,0.3585, 1},
+  {"EBU Tech. 3213-E", 0.6400,0.3300, 0.2900,0.6000, 0.1500,0.0600,
+   "standard", "EBU Tech. 3213-E / ITU-R BT.470 625-line systems", "D65", 0.3127,0.3290, 1},
+  {"eciRGB v2", 0.6700,0.3300, 0.2100,0.7100, 0.1400,0.0800,
+   "standard", "ECI / ISO 22028-2 registry definition", "D50 (space definition)", 0.3457,0.3585, 1},
+  {"Ekta Space PS5", 0.6950,0.3050, 0.2600,0.7000, 0.1100,0.0050,
+   "originator/profile", "Joseph Holmes working-space/profile definition", "D50 (profile definition)", 0.3457,0.3585, 1},
+  {"Eureka RGB", 0.6915,0.3083, 0.0000,1.0000, 0.1440,0.0296,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0,0.0, 0},
+  {"Extended RGB", 0.7010,0.2990, 0.1700,0.7960, 0.1310,0.0460,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0,0.0, 0},
+  {"Guild RGB", 0.7000,0.3000, 0.2550,0.7200, 0.1500,0.0500,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0,0.0, 0},
+  {"Ink-jet RGB", 0.7000,0.3000, 0.2500,0.7200, 0.1300,0.0500,
+   "historical/secondary", "retained from Kang/Pascale", NULL, 0.0,0.0, 0},
+  {"Judd-Wyszecki RGB", 0.7347,0.2653, 0.0743,0.8338, 0.1741,0.0050,
+   "historical/secondary", "retained from Kang/Pascale; not a modern RGB working-space standard", NULL, 0.0,0.0, 0},
+  {"Kress RGB", 0.6915,0.3083, 0.1547,0.8059, 0.1440,0.0297,
+   "historical/secondary", "retained from Kang; primaries correspond approximately to spectral choices", NULL, 0.0,0.0, 0},
+  {"Laser RGB (Starkweather)", 0.7117241,0.2882321, 0.0328204,0.8029257, 0.1632099,0.0119374,
+   "historical/derived", "633, 514 and 442 nm laser primaries evaluated from official CIE 1931 2 degree CMFs", NULL, 0.0,0.0, 0},
+  {"NTSC (1953)", 0.6700,0.3300, 0.2100,0.7100, 0.1400,0.0800,
+   "standard/historical", "NTSC 1953 / ITU-R BT.470 System M", "C (system definition)", 0.310,0.316, 1},
+  {"PAL / SECAM (BT.470 625-line)", 0.6400,0.3300, 0.2900,0.6000, 0.1500,0.0600,
+   "standard", "ITU-R BT.470 systems B/G and EBU", "D65", 0.3127,0.3290, 1},
+  {"ProPhoto RGB (ROMM primaries)", 0.7347,0.2653, 0.1596,0.8404, 0.0366,0.0001,
+   "originator/profile", "ProPhoto profile uses the ROMM RGB primary set", "D50", 0.3457,0.3585, 1},
+  {"ROMM RGB / RIMM RGB", 0.7347,0.2653, 0.1596,0.8404, 0.0366,0.0001,
+   "standard", "ISO 22028-2 ROMM RGB / I3A 7466 RIMM RGB", "D50 (encoding definition)", 0.3457,0.3585, 1},
+  {"ROM RGB", 0.8730,0.1440, 0.1750,0.9270, 0.0850,0.0001,
+   "historical/secondary", "retained from Kang/Pascale; no normative definition located", NULL, 0.0,0.0, 0},
+  {"SGI RGB", 0.6250,0.3400, 0.2800,0.5950, 0.1550,0.0700,
+   "historical/secondary", "retained from Kang/Pascale; same primary set as legacy Apple RGB", NULL, 0.0,0.0, 0},
+  {"SMPTE-C / SMPTE 170M", 0.6300,0.3400, 0.3100,0.5950, 0.1550,0.0700,
+   "standard", "SMPTE-C / SMPTE 170M; cross-checked in ITU-R BT.2380", "D65", 0.3127,0.3290, 1},
+  {"SMPTE 240M", 0.6300,0.3400, 0.3100,0.5950, 0.1550,0.0700,
+   "standard", "SMPTE 240M; cross-checked in ITU-R BT.2380", "D65", 0.3127,0.3290, 1},
+  {"Sony P-22 phosphors", 0.6250,0.3400, 0.2800,0.5950, 0.1550,0.0700,
+   "historical/secondary", "legacy device-phosphor coordinates retained from Kang/Pascale", NULL, 0.0,0.0, 0},
+  {"Adobe Wide Gamut RGB", 0.7347,0.2653, 0.1152,0.8264, 0.1566,0.0177,
+   "originator/profile", "legacy Adobe Wide Gamut RGB profile coordinates; retained rather than forced to a secondary table", "D50 (profile definition)", 0.3457,0.3585, 1},
+  {"Wright RGB", 0.7260,0.2740, 0.1547,0.8059, 0.1440,0.0297,
+   "historical/secondary", "retained from Kang/Pascale; historical experimental RGB system", NULL, 0.0,0.0, 0},
+  {"Usami RGB", 0.7347,0.2653, -0.0860,1.0860, 0.0957,-0.0314,
+   "historical/secondary", "retained from Kang; imaginary green/blue primaries intentionally lie outside the spectral locus", NULL, 0.0,0.0, 0}
+};
+
+#define N_RGB_SPACES ((int) (sizeof (rgb_spaces) / sizeof (rgb_spaces[0])))
+
+/*
+ * General illuminant/white choices.  Where current CIE spectral data are
+ * available, x,y values below were recomputed from the official CIE SPD data
+ * at its published sampling interval with the official CIE 1931 or CIE 1964
+ * colour-matching functions.  These
+ * general illuminant values are intentionally separate from the nominal white
+ * coordinates that define standardized RGB spaces.
+ */
+static const WhitePoint white_points[] = {
+  {"CIE D65, 1931 2 degree", 0.31272687,0.32902321, "official CIE D65 1 nm SPD + CIE 1931 CMFs"},
+  {"CIE D65, 1964 10 degree", 0.31382365,0.33099899, "official CIE D65 1 nm SPD + CIE 1964 CMFs"},
+  {"CIE D50, 1931 2 degree", 0.34568422,0.35850403, "official CIE D50 1 nm SPD + CIE 1931 CMFs"},
+  {"CIE D50, 1964 10 degree", 0.34774768,0.35953602, "official CIE D50 1 nm SPD + CIE 1964 CMFs"},
+  {"CIE A, 1931 2 degree", 0.44757351,0.40743944, "official CIE A 1 nm SPD + CIE 1931 CMFs"},
+  {"CIE A, 1964 10 degree", 0.45117394,0.40593660, "official CIE A 1 nm SPD + CIE 1964 CMFs"},
+  {"CIE B, 1931 2 degree (legacy)", 0.34830,0.35160, "legacy published chromaticity; CIE B is obsolete and no current CIE SPD dataset was located"},
+  {"CIE C, 1931 2 degree", 0.31005847,0.31614971, "official CIE C SPD + CIE 1931 CMFs"},
+  {"CIE C, 1964 10 degree", 0.31038866,0.31905071, "official CIE C SPD + CIE 1964 CMFs"},
+  {"CIE D55, 1931 2 degree", 0.33242410,0.34742804, "official CIE D55 SPD + CIE 1931 CMFs"},
+  {"CIE D55, 1964 10 degree", 0.33411634,0.34876609, "official CIE D55 SPD + CIE 1964 CMFs"},
+  {"ACES white point (D60-like), 1931 2 degree", 0.32168,0.33767, "SMPTE ST 2065-1 / Academy ACES definition"},
+  {"CIE D75, 1931 2 degree", 0.29902230,0.31485274, "official CIE D75 SPD + CIE 1931 CMFs"},
+  {"CIE D75, 1964 10 degree", 0.29967997,0.31740324, "official CIE D75 SPD + CIE 1964 CMFs"},
+  {"CIE daylight 9300 K (D93), 1931 2 degree", 0.28314501,0.29711289, "CIE daylight-locus formula at 9300 K"},
+  {"CIE daylight 9300 K (D93), 1964 10 degree", 0.28325,0.30040, "CIE daylight components evaluated with CIE 1964 CMFs; rounded to avoid false precision"},
+  {"Equal-energy E, 1931 2 degree", 1.0/3.0,1.0/3.0, "mathematical equal-energy white"},
+  {"Equal-energy E, 1964 10 degree", 1.0/3.0,1.0/3.0, "mathematical equal-energy white"},
+  {"CIE FL1, 1931 2 degree", 0.31306243,0.33710648, "CIE 015:2018 FL1 SPD + CIE 1931 CMFs"},
+  {"CIE FL1, 1964 10 degree", 0.31809880,0.33548945, "CIE 015:2018 FL1 SPD + CIE 1964 CMFs"},
+  {"CIE FL2, 1931 2 degree", 0.37206815,0.37512256, "CIE 015:2018 FL2 SPD + CIE 1931 CMFs"},
+  {"CIE FL2, 1964 10 degree", 0.37927483,0.36722793, "CIE 015:2018 FL2 SPD + CIE 1964 CMFs"},
+  {"CIE FL3, 1931 2 degree", 0.40909004,0.39411713, "CIE 015:2018 FL3 SPD + CIE 1931 CMFs"},
+  {"CIE FL3, 1964 10 degree", 0.41764468,0.38312450, "CIE 015:2018 FL3 SPD + CIE 1964 CMFs"},
+  {"CIE FL4, 1931 2 degree", 0.44018110,0.40309069, "CIE 015:2018 FL4 SPD + CIE 1931 CMFs"},
+  {"CIE FL4, 1964 10 degree", 0.44924770,0.39060548, "CIE 015:2018 FL4 SPD + CIE 1964 CMFs"},
+  {"CIE FL5, 1931 2 degree", 0.31375735,0.34516065, "CIE 015:2018 FL5 SPD + CIE 1931 CMFs"},
+  {"CIE FL5, 1964 10 degree", 0.31974054,0.34236696, "CIE 015:2018 FL5 SPD + CIE 1964 CMFs"},
+  {"CIE FL6, 1931 2 degree", 0.37787777,0.38819415, "CIE 015:2018 FL6 SPD + CIE 1931 CMFs"},
+  {"CIE FL6, 1964 10 degree", 0.38662283,0.37837312, "CIE 015:2018 FL6 SPD + CIE 1964 CMFs"},
+  {"CIE FL7, 1931 2 degree", 0.31285247,0.32917418, "CIE 015:2018 FL7 SPD + CIE 1931 CMFs"},
+  {"CIE FL7, 1964 10 degree", 0.31564564,0.32950815, "CIE 015:2018 FL7 SPD + CIE 1964 CMFs"},
+  {"CIE FL8, 1931 2 degree", 0.34580575,0.35861758, "CIE 015:2018 FL8 SPD + CIE 1931 CMFs"},
+  {"CIE FL8, 1964 10 degree", 0.34896556,0.35931730, "CIE 015:2018 FL8 SPD + CIE 1964 CMFs"},
+  {"CIE FL9, 1931 2 degree", 0.37409927,0.37268420, "CIE 015:2018 FL9 SPD + CIE 1931 CMFs"},
+  {"CIE FL9, 1964 10 degree", 0.37825426,0.37038210, "CIE 015:2018 FL9 SPD + CIE 1964 CMFs"},
+  {"CIE FL10, 1931 2 degree", 0.34578790,0.35875793, "CIE 015:2018 FL10 SPD + CIE 1931 CMFs"},
+  {"CIE FL10, 1964 10 degree", 0.35061017,0.35430334, "CIE 015:2018 FL10 SPD + CIE 1964 CMFs"},
+  {"CIE FL11, 1931 2 degree", 0.38053749,0.37691531, "CIE 015:2018 FL11 SPD + CIE 1931 CMFs"},
+  {"CIE FL11, 1964 10 degree", 0.38543539,0.37109479, "CIE 015:2018 FL11 SPD + CIE 1964 CMFs"},
+  {"CIE FL12, 1931 2 degree", 0.43702434,0.40421500, "CIE 015:2018 FL12 SPD + CIE 1931 CMFs"},
+  {"CIE FL12, 1964 10 degree", 0.44265468,0.39706106, "CIE 015:2018 FL12 SPD + CIE 1964 CMFs"}
+};
+
+#define N_WHITE_POINTS ((int) (sizeof (white_points) / sizeof (white_points[0])))
+
 // Function prototypes
 int inputtext (char *);
-int readline (FILE*, char*, int);
+int readline (FILE *, char *, int);
+int parse_int_string (const char *, int *);
+int parse_cmf_record (const char *, double *);
 int choose_cmf (int *, char *, double *);
 int load_cmf (int, char *, double **);
 int cmf (double, int, double **, double *);
 int xy2uv (double, double, int *, int *, int, int);
 int plot (int, int, int *, uint8_t *, int, int);
-int draw_num (int, int, char *, int *, unsigned char *, int, int);
+int draw_num (int, int, char *, int *, uint8_t *, int, int);
 int draw_line (int *, int *, int *, uint8_t *, int, int);
 int within_polygon (double, double, double **, int);
 int bmp (char *, uint8_t *, int, int);
@@ -58,26 +218,27 @@ void write_u32_le (FILE *, uint32_t);
 void write_s32_le (FILE *, int32_t);
 int rgb_primaries (double **);
 int illum_white (double *);
-int *allocate_intmem (int);
-int **allocate_intmemp (int);
-char *allocate_strmem (int);
-double *allocate_doublemem (int);
-double **allocate_doublememp (int);
-uint8_t *allocate_ustrmem (int);
+int *allocate_intmem (size_t);
+int **allocate_intmemp (size_t);
+char *allocate_strmem (size_t);
+double *allocate_doublemem (size_t);
+double **allocate_doublememp (size_t);
+uint8_t *allocate_ustrmem (size_t);
+size_t image_buffer_size (int, int);
 
 // Set some symbolic constants.
-#define MAXLEN 256  // Maximum number of characters per line
+#define MAX_STRINGLEN 256  // Maximum number of characters per line
 
 int
-main (int argc, char **argv) {
+main (void) {
 
-  int i, j, nlines, narray, *rgb, width, height, count, u, v, *left, *right;
-  int **uv, u_centroid, v_centroid, min, max, add_axes, mark_white, du, dv, uborder, vborder, mark_rgb;
-  int *point1_uv, *point2_uv, fill_srgb;
-  double INTERVAL, **cmxyz, lambda, **xyzbar, **xyz;
+  int i, j, nlines, narray, *rgb, width, height, count, u, v;
+  int **uv, add_axes, mark_white, uborder, vborder, mark_rgb;
+  int *point1_uv, *point2_uv, fill_srgb, axes_width, axes_height;
+  double INTERVAL, **cmxyz, lambda, **xyzbar, **xyz, range, sample_count, sum;
   double *white_xyz, val, **p, **polygon, *xyzvector, *rgb_double;
   uint8_t *buffer, *buffer2;
-  char *filename, *temp, *endptr;
+  char *filename, *temp;
 
   // Wavelength step size (interpolate if necessary)
   // INTERVAL is changed below to 10 nm for Judd 1951 data; even still, it's poorly behaved.
@@ -88,14 +249,12 @@ main (int argc, char **argv) {
   vborder = 40;  // Top & bottom border widths
 
   // Allocate memory for various arrays.
-  filename = allocate_strmem (MAXLEN);
-  temp = allocate_strmem (MAXLEN);
+  filename = allocate_strmem (MAX_STRINGLEN);
+  temp = allocate_strmem (MAX_STRINGLEN);
   rgb = allocate_intmem (3);
   white_xyz = allocate_doublemem (3);
   xyzvector = allocate_doublemem (3);
   rgb_double = allocate_doublemem (3);
-  left = allocate_intmem (2);
-  right = allocate_intmem (2);
   p = allocate_doublememp (3);
   polygon = allocate_doublememp (3);
   for (i=0; i<3; i++) {
@@ -104,22 +263,21 @@ main (int argc, char **argv) {
   }
   point1_uv = allocate_intmem (2);
   point2_uv = allocate_intmem (2);
+  buffer2 = NULL;
 
   // Ask for bitmap dimension.
   fprintf (stdout, "\nBitmap dimension (square) (px)? ");
-  memset (temp, 0, MAXLEN * sizeof (char));
+  memset (temp, 0, MAX_STRINGLEN * sizeof (char));
   inputtext (temp);
-  errno = 0;
-  width = (int) strtol (temp, &endptr, 10);
-  if ((errno == ERANGE) || (errno == EINVAL) || (endptr == temp)) {
-    fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
+  if ((parse_int_string (temp, &width) == EXIT_FAILURE) ||
+      (width < 2) || (width > INT_MAX - (2 * uborder))) {
+    fprintf (stderr, "ERROR: Invalid bitmap dimension: %s\n", temp);
     exit (EXIT_FAILURE);
   }
   height = width;  // Same as width so locus isn't distorted.
 
-  // Allocate memory for various arrays.
-  buffer = allocate_ustrmem (width * height * 3);  // For bitmap data without axes.
-  buffer2 = allocate_ustrmem ((width + (2 * uborder)) * (height + (2 * vborder)) * 3);  // For bitmap data with axes.
+  // Allocate bitmap data without axes. Multiplication is checked before calloc().
+  buffer = allocate_ustrmem (image_buffer_size (width, height));
 
   // Choose color-matching function (CMF).
   for (;;) {
@@ -127,7 +285,7 @@ main (int argc, char **argv) {
   }
 
   // Allocate memory for various arrays.
-  cmxyz = allocate_doublememp (nlines);
+  cmxyz = allocate_doublememp ((size_t) nlines);
   for (i=0; i<(nlines); i++) {
     cmxyz[i] = allocate_doublemem (4);  // lambda, xbar, ybar, zbar
   }
@@ -139,7 +297,7 @@ main (int argc, char **argv) {
 
   // Ask whether to plot outline of rgb gamut on bitmap.
   fprintf (stdout, "\nPlot outline of RGB gamut on bitmap (y/n)? ");
-  memset (temp, 0, MAXLEN * sizeof (char));
+  memset (temp, 0, MAX_STRINGLEN * sizeof (char));
   inputtext (temp);
   if ((temp[0] == 'y') || (temp[0] == 'Y')) {
     mark_rgb = 1;
@@ -152,7 +310,7 @@ main (int argc, char **argv) {
 
   // Ask whether to fill in the sRGB color gamut on bitmap.
   fprintf (stdout, "\nFill in the sRGB color gamut on bitmap (y/n)? ");
-  memset (temp, 0, MAXLEN * sizeof (char));
+  memset (temp, 0, MAX_STRINGLEN * sizeof (char));
   inputtext (temp);
   if ((temp[0] == 'y') || (temp[0] == 'Y')) {
     fill_srgb = 1;
@@ -162,7 +320,7 @@ main (int argc, char **argv) {
 
   // Ask whether to mark white point on bitmap.
   fprintf (stdout, "\nMark white point on bitmap (y/n)? ");
-  memset (temp, 0, MAXLEN * sizeof (char));
+  memset (temp, 0, MAX_STRINGLEN * sizeof (char));
   inputtext (temp);
   if ((temp[0] == 'y') || (temp[0] == 'Y')) {
     mark_white = 1;
@@ -173,11 +331,17 @@ main (int argc, char **argv) {
     mark_white = 0;
   }
 
-  // Allocate memory for various arrays.
-  narray = (int) (((cmxyz[nlines-1][0] - cmxyz[0][0]) / INTERVAL) + 1.5);
-  xyzbar = allocate_doublememp (narray);
-  xyz = allocate_doublememp (narray);
-  uv = allocate_intmemp (narray);
+  // Allocate enough sample slots for the requested interpolation interval.
+  range = cmxyz[nlines - 1][0] - cmxyz[0][0];
+  sample_count = ceil (range / INTERVAL) + 1.0;
+  if (!isfinite (sample_count) || (sample_count < 2.0) || (sample_count > (double) INT_MAX)) {
+    fprintf (stderr, "ERROR: Invalid number of interpolated CMF samples.\n");
+    exit (EXIT_FAILURE);
+  }
+  narray = (int) sample_count;
+  xyzbar = allocate_doublememp ((size_t) narray);
+  xyz = allocate_doublememp ((size_t) narray);
+  uv = allocate_intmemp ((size_t) narray);
   for (i=0; i<narray; i++) {
     xyz[i] = allocate_doublemem (3);
     xyzbar[i] = allocate_doublemem (3);
@@ -186,18 +350,26 @@ main (int argc, char **argv) {
 
   // Ask whether to include axes on bitmap.
   fprintf (stdout, "\nInclude axes on bitmap? (borders will be added to bitmap size) (y/n)? ");
-  memset (temp, 0, MAXLEN * sizeof (char));
+  memset (temp, 0, MAX_STRINGLEN * sizeof (char));
   inputtext (temp);
   if ((temp[0] == 'y') || (temp[0] == 'Y')) {
     add_axes = 1;
+    axes_width = width + (2 * uborder);
+    axes_height = height + (2 * vborder);
+    buffer2 = allocate_ustrmem (image_buffer_size (axes_width, axes_height));
   } else {
     add_axes = 0;
+    axes_width = 0;
+    axes_height = 0;
   }
 
   // Loop through full range of wavelengths in nm steps defined by INTERVAL.
   count = 0;
   lambda = cmxyz[0][0];  // Start at first wavelength in CMF table.
-  while (lambda <= cmxyz[nlines-1][0]) {
+  while ((count < narray) &&
+         (lambda <= cmxyz[nlines - 1][0] + (fabs (cmxyz[nlines - 1][0]) * 1.0e-12 + 1.0e-12))) {
+
+    if (lambda > cmxyz[nlines - 1][0]) lambda = cmxyz[nlines - 1][0];
 
     // Retrieve wavelength and color-matching coodinates xbar, ybar, zbar for requested wavelength.
     // Note: For single wavelength, the CMF X,Y,Z coordinates are the linear scene tristimulus values. i.e., no need to integrate
@@ -209,18 +381,30 @@ main (int argc, char **argv) {
 //  fprintf (stdout, "XYZ CMF coordinates: %.12lf %.12lf %.12lf\n", xyzbar[count][0], xyzbar[count][1], xyzbar[count][2]);
 
     // Compute spectral chromaticity coordinates xyz.
-    xyz[count][0] = xyzbar[count][0] / (xyzbar[count][0] + xyzbar[count][1] + xyzbar[count][2]);
-    xyz[count][1] = xyzbar[count][1] / (xyzbar[count][0] + xyzbar[count][1] + xyzbar[count][2]);
-    xyz[count][2] = xyzbar[count][2] / (xyzbar[count][0] + xyzbar[count][1] + xyzbar[count][2]);
+    sum = xyzbar[count][0] + xyzbar[count][1] + xyzbar[count][2];
+    if (!isfinite (sum) || (fabs (sum) <= DBL_MIN)) {
+      fprintf (stderr, "ERROR: CMF tristimulus sum is zero or non-finite at %.12g nm.\n", lambda);
+      exit (EXIT_FAILURE);
+    }
+    xyz[count][0] = xyzbar[count][0] / sum;
+    xyz[count][1] = xyzbar[count][1] / sum;
+    xyz[count][2] = xyzbar[count][2] / sum;
 //  fprintf (stdout, "Spectral chromaticity coordinates xyz: %.12lf %.12lf %.12lf\n", xyz[count][0], xyz[count][1], xyz[count][2]);
 
     // Convert xy chromaticity coordinates to uv pixel coordinates.
-    xy2uv (xyz[count][0], xyz[count][1], &u, &v, width, height);
+    if (xy2uv (xyz[count][0], xyz[count][1], &u, &v, width, height) == EXIT_FAILURE) {
+      fprintf (stderr, "ERROR: Invalid chromaticity coordinates at %.12g nm.\n", lambda);
+      exit (EXIT_FAILURE);
+    }
     uv[count][0] = u;
     uv[count][1] = v;
 
     count++;
     lambda = cmxyz[0][0] + (((double) count) * INTERVAL);
+  }
+  if (count < 2) {
+    fprintf (stderr, "ERROR: Fewer than two chromaticity samples were generated.\n");
+    exit (EXIT_FAILURE);
   }
 //fprintf (stdout, "count: %i   narray: %i\n", count, narray);
 
@@ -229,57 +413,20 @@ main (int argc, char **argv) {
   rgb[0] = 255;
   rgb[1] = 255;
   rgb[2] = 255;
-  for (i=0; i<narray; i++) {
+  for (i=0; i<count; i++) {
     plot (uv[i][0], uv[i][1], rgb, buffer, width, height);
   }
 
-  // Calculate coordinates of the centroid of polygon defined by pixel coordinates of chromaticities.
-  u_centroid = 0;
-  v_centroid = 0;
-  for (i=0; i<narray; i++) {
-    u_centroid += uv[i][0];
-    v_centroid += uv[i][1];
-  }
-  u_centroid = (int) ((double) u_centroid / (double) narray);
-  v_centroid = (int) ((double) v_centroid / (double) narray);
-//printf ("Centroid (x,y): %i %i\n", u_centroid, v_centroid);
-
-  // Find lowest point to right of centroid. i.e., rightmost end of locus
-  min = height;
-  for (i=0; i<narray; i++) {
-    if (uv[i][0] > u_centroid) {
-      if (uv[i][1] < min) {
-        min = uv[i][1];
-        right[0] = uv[i][0];
-        right[1] = uv[i][1];
-      }
-    }
-  }
-//  printf ("rightmost: %i %i\n", right[0], right[1]);
-
-  // Find rightmost point to the left and below centroid. i.e., other end of locus
-  max = 0;
-  for (i=0; i<narray; i++) {
-    if ((uv[i][1] < v_centroid) && (uv[i][0] < u_centroid)) {
-      if (uv[i][0] > max) {
-        max = uv[i][0];
-        left[0] = uv[i][0];
-        left[1] = uv[i][1];
-      }
-    }
-  }
-//  printf ("left: %i %i\n", left[0], left[1]);
-
-  // Plot purple line.
-  draw_line (left, right, rgb, buffer, width, height);
+  // The line of purples directly joins the two wavelength endpoints of the spectral locus.
+  draw_line (uv[0], uv[count - 1], rgb, buffer, width, height);
 
   // Fill in sRGB color gamut if requested.
   if (fill_srgb) {
 
     // Define a polygon by sRGB (BT.709) color primaries as vertices.
-    polygon[0][0] = 0.640 * (double) width; polygon[0][1] = 0.330 * (double) height;  // Red
-    polygon[1][0] = 0.300 * (double) width; polygon[1][1] = 0.600 * (double) height;  // Green
-    polygon[2][0] = 0.150 * (double) width; polygon[2][1] = 0.060 * (double) height;  // Blue
+    polygon[0][0] = rgb_spaces[0].xr * (double) (width - 1); polygon[0][1] = rgb_spaces[0].yr * (double) (height - 1);  // Red
+    polygon[1][0] = rgb_spaces[0].xg * (double) (width - 1); polygon[1][1] = rgb_spaces[0].yg * (double) (height - 1);  // Green
+    polygon[2][0] = rgb_spaces[0].xb * (double) (width - 1); polygon[2][1] = rgb_spaces[0].yb * (double) (height - 1);  // Blue
    
     // Loop through all pixels in bitmap.
     for (u=0; u<width; u++) {
@@ -289,8 +436,8 @@ main (int argc, char **argv) {
         if (within_polygon ((double) u, (double) v, polygon, 3)) {
 
           // Calculate chromaticity coordinates for current pixel.
-          xyzvector[0] = (double) u / (double) width;
-          xyzvector[1] = (double) v / (double) height;
+          xyzvector[0] = (double) u / (double) (width - 1);
+          xyzvector[1] = (double) v / (double) (height - 1);
           xyzvector[2] = 1.0 - xyzvector[0] - xyzvector[1];
 
           // Convert linear xyz chromaticity coordinates to linear rgb chromaticity coordinates.
@@ -385,79 +532,63 @@ main (int argc, char **argv) {
     rgb[2] = 255;
 
     // Copy locus to buffer2 which will contain axes.
-    i = 0;  // Index of buffer
     for (v=0; v<height; v++) {
       for (u=0; u<width; u++) {
-        buffer2[((u + uborder) * 3) + ((v + vborder) * (width + (2 * uborder)) * 3)] = buffer[i];
-        buffer2[((u + uborder) * 3) + ((v + vborder) * (width + (2 * uborder)) * 3) + 1] = buffer[i + 1];
-        buffer2[((u + uborder) * 3) + ((v + vborder) * (width + (2 * uborder)) * 3) + 2] = buffer[i + 2];
-        i += 3;
+        size_t src = ((size_t) u + (size_t) v * (size_t) width) * 3u;
+        size_t dst = ((size_t) (u + uborder) +
+                      (size_t) (v + vborder) * (size_t) axes_width) * 3u;
+        buffer2[dst] = buffer[src];
+        buffer2[dst + 1u] = buffer[src + 1u];
+        buffer2[dst + 2u] = buffer[src + 2u];
       }
     }
 
-    // Plot horizontal axis line.
-    du = (int) (width / 10);
-    point1_uv[0] = uborder; point1_uv[1] = vborder;
-    point2_uv[0] = uborder + (10 * du); point2_uv[1] = vborder;
-    draw_line (point1_uv, point2_uv, rgb, buffer2, width + (2 * uborder), height + (2 * vborder));
+    // Plot horizontal axis line from x = 0.0 through x = 1.0.
+    point1_uv[0] = uborder;
+    point1_uv[1] = vborder;
+    point2_uv[0] = uborder + width - 1;
+    point2_uv[1] = vborder;
+    draw_line (point1_uv, point2_uv, rgb, buffer2, axes_width, axes_height);
 
-    // Plot horizontal axis tick marks.
-    u = 0;
+    // Plot horizontal tick marks and numerical labels.
     for (i=0; i<=10; i++) {
-      point1_uv[0] = u + uborder; point1_uv[1] = vborder - 10;
-      point2_uv[0] = u + uborder; point2_uv[1] = vborder;
-      draw_line (point1_uv, point2_uv, rgb, buffer2, width + (2 * uborder), height + (2 * vborder));
-      u += du;
+      u = uborder + (int) lround ((double) i * (double) (width - 1) / 10.0);
+      point1_uv[0] = u; point1_uv[1] = vborder - 10;
+      point2_uv[0] = u; point2_uv[1] = vborder;
+      draw_line (point1_uv, point2_uv, rgb, buffer2, axes_width, axes_height);
+
+      val = (double) i / 10.0;
+      snprintf (temp, MAX_STRINGLEN, "%0.1f", val);
+      draw_num (u - 14, vborder - 24, temp, rgb, buffer2, axes_width, axes_height);
     }
 
-    // Plot numerical labels for horizontal axis.
-    val = 0.0;
-    u = uborder - 14;  // Starting horizontal position (px)
-    v = vborder - 24;  // Vertical position (px)
+    // Plot vertical axis line from y = 0.0 through y = 1.0.
+    point1_uv[0] = uborder;
+    point1_uv[1] = vborder;
+    point2_uv[0] = uborder;
+    point2_uv[1] = vborder + height - 1;
+    draw_line (point1_uv, point2_uv, rgb, buffer2, axes_width, axes_height);
+
+    // Plot vertical tick marks and numerical labels.
     for (i=0; i<=10; i++) {
-      memset (temp, 0, MAXLEN * sizeof (char));
-      sprintf (temp, "%0.1lf", val);
-      draw_num (u, v, temp, rgb, buffer2, width + (2 * uborder), height + (2 * vborder));
-      val += 0.1;
-      u += du;
+      v = vborder + (int) lround ((double) i * (double) (height - 1) / 10.0);
+      point1_uv[0] = uborder - 10; point1_uv[1] = v;
+      point2_uv[0] = uborder; point2_uv[1] = v;
+      draw_line (point1_uv, point2_uv, rgb, buffer2, axes_width, axes_height);
+
+      val = (double) i / 10.0;
+      snprintf (temp, MAX_STRINGLEN, "%0.1f", val);
+      draw_num (0, v - 4, temp, rgb, buffer2, axes_width, axes_height);
     }
 
-    // Plot vertical axis line.
-    dv = (int) (height / 10);
-    point1_uv[0] = uborder; point1_uv[1] = vborder;
-    point2_uv[0] = uborder; point2_uv[1] = vborder + (10 * dv);
-    draw_line (point1_uv, point2_uv, rgb, buffer2, width + (2 * uborder), height + (2 * vborder));
-
-    // Plot vertical axis tick marks.
-    v = 0;
-    for (i=0; i<=10; i++) {
-      point1_uv[0] = uborder - 10; point1_uv[1] = v + vborder;
-      point2_uv[0] = uborder; point2_uv[1] = v + vborder;
-      draw_line (point1_uv, point2_uv, rgb, buffer2, width + (2 * uborder), height + (2 * vborder));
-      v += dv;
+    if (bmp ("out.bmp", buffer2, axes_width, axes_height) == EXIT_FAILURE) {
+      exit (EXIT_FAILURE);
     }
 
-    // Plot numerical labels for vertical axis.
-    val = 0.0;
-    u = 0;  // Horizontal position (px)
-    v = vborder - 4;  // Starting vertical position (px)
-    for (i=0; i<=10; i++) {
-      memset (temp, 0, MAXLEN * sizeof (char));
-      sprintf (temp, "%0.1lf", val);
-      draw_num (u, v, temp, rgb, buffer2, width + (2 * uborder), height + (2 * vborder));
-      val += 0.1;
-      v += dv;
-    }
-
-    // Create bitmap output file.
-    bmp ("out.bmp", buffer2, width + (2 * uborder), height + (2 * vborder));
-
-  // No axes to plot.
   } else {
-
-    // Create bitmap output file.
-    bmp ("out.bmp", buffer, width, height);
-
+    if (bmp ("out.bmp", buffer, width, height) == EXIT_FAILURE) {
+      exit (EXIT_FAILURE);
+    }
   }  // End if add_axes
 
   fprintf (stdout, "\n");
@@ -477,8 +608,6 @@ main (int argc, char **argv) {
   free (point1_uv);
   free (point2_uv);
   free (rgb);
-  free (left);
-  free (right);
   for (i=0; i<nlines; i++) {
     free (cmxyz[i]);
   }
@@ -501,15 +630,75 @@ main (int argc, char **argv) {
 int
 inputtext (char *text) {
 
-  // Request new text from standard input.
-  fgets (text, MAXLEN, stdin);
+  size_t len;
 
-  // Remove trailing newline, if there.
-  if ((strnlen(text, MAXLEN) > 0) && (text[strnlen (text, MAXLEN) - 1] == '\n')) {
-    text[strnlen (text, MAXLEN) - 1] = '\0';  // Replace newline with string termination.
+  if (fgets (text, MAX_STRINGLEN, stdin) == NULL) {
+    fprintf (stderr, "Unable to read text from standard input.\n");
+    exit (EXIT_FAILURE);
+  }
+
+  len = strlen (text);
+  if (len > 0 && text[len - 1] == '\n') {
+    text[len - 1] = '\0';
+  } else if (len == MAX_STRINGLEN - 1) {
+    int ch;
+    while ((ch = getchar ()) != '\n' && ch != EOF) {
+      // Discard the remainder of an overlong input line.
+    }
+    fprintf (stderr, "Input text is too long; maximum is %d characters.\n", MAX_STRINGLEN - 2);
+    exit (EXIT_FAILURE);
   }
 
   return (EXIT_SUCCESS);
+}
+
+// Convert a complete input string to int, allowing surrounding whitespace only.
+int
+parse_int_string (const char *text, int *value) {
+
+  char *endptr;
+  long parsed;
+
+  if ((text == NULL) || (value == NULL)) return (EXIT_FAILURE);
+
+  errno = 0;
+  parsed = strtol (text, &endptr, 10);
+  if ((errno == ERANGE) || (endptr == text)) return (EXIT_FAILURE);
+  while (isspace ((unsigned char) *endptr)) endptr++;
+  if ((*endptr != '\0') || (parsed < INT_MIN) || (parsed > INT_MAX)) {
+    return (EXIT_FAILURE);
+  }
+
+  *value = (int) parsed;
+  return (EXIT_SUCCESS);
+}
+
+// Parse one numeric CMF record: wavelength, xbar, ybar, zbar.
+// Blank lines, comments, and textual headers are ignored (return 0).
+// A line that starts numerically but is malformed returns -1.
+int
+parse_cmf_record (const char *line, double *values) {
+
+  const char *p;
+  char extra;
+  int n;
+
+  if ((line == NULL) || (values == NULL)) return (-1);
+  p = line;
+  while (isspace ((unsigned char) *p)) p++;
+  if ((*p == '\0') || (*p == '#') || (*p == ';')) return (0);
+
+  if (!isdigit ((unsigned char) *p) && (*p != '+') && (*p != '-') && (*p != '.')) {
+    return (0);
+  }
+
+  n = sscanf (p, "%lf %lf %lf %lf %c",
+              &values[0], &values[1], &values[2], &values[3], &extra);
+  if (n != 4) return (-1);
+  if (!isfinite (values[0]) || !isfinite (values[1]) ||
+      !isfinite (values[2]) || !isfinite (values[3])) return (-1);
+
+  return (1);
 }
 
 // Read a single line of text from a csv text file.
@@ -518,55 +707,34 @@ inputtext (char *text) {
 int
 readline (FILE *fi, char *line, int limit) {
 
-  int i, n;
+  int ch, i;
 
-  i = 0;  // i is pointer to byte in line.
-  while (i < limit) {
+  if ((fi == NULL) || (line == NULL) || (limit < 2)) return (-2);
 
-    // Grab next byte from file.
-    n = fgetc (fi);
+  i = 0;
+  while (i < limit - 1) {
+    ch = fgetc (fi);
 
-    // End of file reached.
-    // Tell calling function, by returning -1, that we're at end of file, so it won't call readline() again.
-    if (n == EOF) {
-
-      // If there's no end of line at the end of the file, ensure string termination.
-      if (i > 0) {
-        line[i] = 0;
-        return (0);
-      }
-      return (-1);
+    if (ch == EOF) {
+      if (i == 0) return (-1);
+      line[i] = '\0';
+      return (0);
     }
-
-    // Found a carriage return. Ignore it.
-    if (n == '\r') {
-      continue;
-    }
-
-    // Found a comma; convert to space.
-    if (n == ',') {
-      n = ' ';
-    }
-
-    // Found a newline. Change to 0 for string termination.
-    // Break out of loop since this is the end of the current line.
-    if (n == '\n') {
-      line[i] = 0;  // Replace with 0 for string termination.
+    if (ch == '\r') continue;
+    if (ch == ',') ch = ' ';
+    if (ch == '\n') {
+      line[i] = '\0';
       return (0);
     }
 
-    // Seems to be a valid character. Keep it.
-    line[i] = n;
-    i++;
+    line[i++] = (char) ch;
   }
 
-  // Advance to next line.
-  n = 0;
-  while ((n != '\n') && (n != EOF)) {
-    n = fgetc (fi);
+  // A physical line that does not fit is rejected rather than silently truncated.
+  line[i] = '\0';
+  while ((ch = fgetc (fi)) != '\n' && ch != EOF) {
   }
-
-  return (0);
+  return (-2);
 }
 
 // Choose color-matching function (CMF).
@@ -574,12 +742,12 @@ readline (FILE *fi, char *line, int limit) {
 int
 choose_cmf (int *nlines, char *filename, double *INTERVAL) {
 
-  int choice;
-  char *temp, *endptr;
+  int choice, parsed, status;
+  double values[4];
+  char *temp;
   FILE *fi;
 
-  // Allocate memory for various arrays.
-  temp = allocate_strmem (MAXLEN);
+  temp = allocate_strmem (MAX_STRINGLEN);
 
   fprintf (stdout, "\nChoose color-matching function (CMF):\n\n");
   fprintf (stdout, "  1 - 1964 10-deg XYZ CMFs (JIS Z 8701:1999)\n");
@@ -590,72 +758,79 @@ choose_cmf (int *nlines, char *filename, double *INTERVAL) {
   fprintf (stdout, "  6 - 2006 10-deg XYZ CMFs transformed from the CIE (2006) 10-deg LMS cone fundamentals\n");
   fprintf (stdout, "  7 - Enter filename for CMFs (nm, xbar, ybar, zbar as .csv)\n");
   fprintf (stdout, "\nChoice? ");
-  memset (temp, 0, MAXLEN * sizeof (char));
   inputtext (temp);
-  errno = 0;
-  choice = (int) strtol (temp, &endptr, 10);
-  if ((errno == ERANGE) || (errno == EINVAL) || (endptr == temp)) {
+  if (parse_int_string (temp, &choice) == EXIT_FAILURE) {
     fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
-    exit (EXIT_FAILURE);
+    free (temp);
+    return (-1);
   }
-  switch (choice) { 
 
+  switch (choice) {
     case 1:
-      strncpy (filename, "data/CIE_xyz_1964_10deg.csv", MAXLEN);  // 1964 10-deg XYZ CMFs (JIS Z 8701:1999)
+      snprintf (filename, MAX_STRINGLEN, "data/CIE_xyz_1964_10deg.csv");
       break;
     case 2:
-      strncpy (filename, "data/CIE_xyz_1931_2deg.csv", MAXLEN);  // 1931 2-deg XYZ CIE CMFs (CIE.15.2004)
-      break; 
+      snprintf (filename, MAX_STRINGLEN, "data/CIE_xyz_1931_2deg.csv");
+      break;
     case 3:
-      strncpy (filename, "data/CIE_xyz_1931_2deg_judd1951.csv", MAXLEN);  // 1931 2-deg XYZ CIE CMFs with Judd (1951) modifications
-      (*INTERVAL) = 10.0; 
+      snprintf (filename, MAX_STRINGLEN, "data/CIE_xyz_1931_2deg_judd1951.csv");
+      *INTERVAL = 10.0;
       break;
     case 4:
-      strncpy (filename, "data/CIE_xyz_1931_2deg_judd1951_vos1978.csv", MAXLEN);  // 1931 2-deg XYZ CIE CMFs with Judd (1951) and Vos (1978) modifications
+      snprintf (filename, MAX_STRINGLEN, "data/CIE_xyz_1931_2deg_judd1951_vos1978.csv");
       break;
     case 5:
-      strncpy (filename, "data/CIE_xyz_2006_2deg_lms_cones.csv", MAXLEN);  // 2006 2-deg XYZ CMFs transformed from the CIE (2006) 2-deg LMS cone fundamentals
+      snprintf (filename, MAX_STRINGLEN, "data/CIE_xyz_2006_2deg_lms_cones.csv");
       break;
     case 6:
-      strncpy (filename, "data/CIE_xyz_2006_10deg_lms_cones.csv", MAXLEN);  // 2006 10-deg XYZ CMFs transformed from the CIE (2006) 10-deg LMS cone fundamentals
+      snprintf (filename, MAX_STRINGLEN, "data/CIE_xyz_2006_10deg_lms_cones.csv");
       break;
     case 7:
       fprintf (stdout, "Filename for csv CMFs? ");
-      memset (temp, 0, MAXLEN * sizeof (char));
       inputtext (filename);
       break;
     default:
       fprintf (stderr, "Invalid selection.\n");
+      free (temp);
       return (-1);
   }
 
-  // Open color-matching functions csv file.
   fi = fopen (filename, "r");
   if (fi == NULL) {
     fprintf (stderr, "ERROR: Unable to open input file \"%s\".\n", filename);
+    free (temp);
     exit (EXIT_FAILURE);
   }
 
-  // Count lines in input file.
-  (*nlines) = 0;
-  for (;;) {
-
-    if (readline (fi, temp, MAXLEN) == -1) {
-      break;  // Reached end of file.
+  *nlines = 0;
+  while ((status = readline (fi, temp, MAX_STRINGLEN)) != -1) {
+    if (status == -2) {
+      fprintf (stderr, "ERROR: Line in color-matching file exceeds %d characters.\n", MAX_STRINGLEN - 1);
+      fclose (fi);
+      free (temp);
+      exit (EXIT_FAILURE);
     }
+    parsed = parse_cmf_record (temp, values);
+    if (parsed < 0) {
+      fprintf (stderr, "ERROR: Malformed numeric CMF row: %s\n", temp);
+      fclose (fi);
+      free (temp);
+      exit (EXIT_FAILURE);
+    }
+    if (parsed > 0) (*nlines)++;
+  }
 
-    if ((temp[0] >= '0') && (temp[0]<= '9')) (*nlines)++;
+  if (*nlines < 2) {
+    fprintf (stderr, "ERROR: Color-matching file must contain at least two numeric rows.\n");
+    fclose (fi);
+    free (temp);
+    exit (EXIT_FAILURE);
+  }
 
-  }  // Next line of input file.
-  fprintf (stdout, "%i lines in color-matching file: %s\n", (*nlines), filename);
-
-  // Close input file.
+  fprintf (stdout, "%i lines in color-matching file: %s\n", *nlines, filename);
   fclose (fi);
-
-  // Free allocated memory.
   free (temp);
-
-  return (0);  // Success
+  return (0);
 }
 
 // Load color-matching function (CMF).
@@ -663,44 +838,68 @@ choose_cmf (int *nlines, char *filename, double *INTERVAL) {
 int
 load_cmf (int nlines, char *filename, double **cmxyz) {
 
-  int i;
+  int i, parsed, status;
+  double values[4];
   char *temp;
   FILE *fi;
 
-  // Allocate memory for various arrays.
-  temp = allocate_strmem (MAXLEN);
+  if ((nlines < 2) || (filename == NULL) || (cmxyz == NULL)) return (EXIT_FAILURE);
+  temp = allocate_strmem (MAX_STRINGLEN);
 
-  // Open color-matching functions csv file.
   fi = fopen (filename, "r");
   if (fi == NULL) {
     fprintf (stderr, "ERROR: Unable to open input file \"%s\".\n", filename);
+    free (temp);
     exit (EXIT_FAILURE);
   }
 
-  // Read color-matching functions into array cmxyz.
-  // cmxyz array: lambda, xbar, ybar, zbar.
-  for (i=0; i<nlines; i++) {
-
-    // Read line from input file.
-    memset (temp, 0, MAXLEN * sizeof (char));
-    if (readline (fi, temp, MAXLEN) == -1) {
-      fprintf (stderr, "ERROR: Cannot read color-matching file \"%s\".\n", filename);
+  i = 0;
+  while ((status = readline (fi, temp, MAX_STRINGLEN)) != -1) {
+    if (status == -2) {
+      fprintf (stderr, "ERROR: Line in color-matching file exceeds %d characters.\n", MAX_STRINGLEN - 1);
+      fclose (fi);
+      free (temp);
       exit (EXIT_FAILURE);
     }
 
-    // Extract values from line of text.
-    sscanf (temp, "%lf %lf %lf %lf", &cmxyz[i][0], &cmxyz[i][1], &cmxyz[i][2], &cmxyz[i][3]);
-//printf ("%.0lf %.12lf %.12lf %.12lf\n", cmxyz[i][0], cmxyz[i][1], cmxyz[i][2], cmxyz[i][3]);
+    parsed = parse_cmf_record (temp, values);
+    if (parsed < 0) {
+      fprintf (stderr, "ERROR: Malformed numeric CMF row: %s\n", temp);
+      fclose (fi);
+      free (temp);
+      exit (EXIT_FAILURE);
+    }
+    if (parsed == 0) continue;
+    if (i >= nlines) {
+      fprintf (stderr, "ERROR: CMF row count changed between count and load passes.\n");
+      fclose (fi);
+      free (temp);
+      exit (EXIT_FAILURE);
+    }
 
-  }  // Next line
+    cmxyz[i][0] = values[0];
+    cmxyz[i][1] = values[1];
+    cmxyz[i][2] = values[2];
+    cmxyz[i][3] = values[3];
 
-  // Close input file.
+    if ((i > 0) && !(cmxyz[i][0] > cmxyz[i - 1][0])) {
+      fprintf (stderr, "ERROR: CMF wavelengths must be strictly increasing; %.12g follows %.12g.\n",
+               cmxyz[i][0], cmxyz[i - 1][0]);
+      fclose (fi);
+      free (temp);
+      exit (EXIT_FAILURE);
+    }
+    i++;
+  }
+
   fclose (fi);
-
-  // Free allocated memory.
   free (temp);
 
-  return (0);  // Success
+  if (i != nlines) {
+    fprintf (stderr, "ERROR: Expected %d CMF rows but loaded %d.\n", nlines, i);
+    exit (EXIT_FAILURE);
+  }
+  return (0);
 }
 
 // Return xyz color-matching function (CMF) coordinates by interpolating the data.
@@ -709,6 +908,10 @@ cmf (double lambda, int nlines, double **cmxyz, double *xyzbar) {
 
   int i, lb, ub;
   double frac;
+
+  if ((nlines < 2) || (cmxyz == NULL) || (xyzbar == NULL) || !isfinite (lambda)) {
+    return (EXIT_FAILURE);
+  }
 
   // If lambda is above or below table data, return error.
   if ((lambda < cmxyz[0][0]) || (lambda > cmxyz[nlines-1][0])) {
@@ -736,6 +939,7 @@ cmf (double lambda, int nlines, double **cmxyz, double *xyzbar) {
     // Upper bound
     ub = lb + 1;
 
+    if (!(cmxyz[ub][0] > cmxyz[lb][0])) return (EXIT_FAILURE);
     frac = (lambda - cmxyz[lb][0]) / (cmxyz[ub][0] - cmxyz[lb][0]);
 
     // Interpolate CMF coordinates.
@@ -751,27 +955,44 @@ cmf (double lambda, int nlines, double **cmxyz, double *xyzbar) {
 int
 xy2uv (double x, double y, int *u, int *v, int width, int height) {
 
-  // Chromaticities xy range from 0 to 1.
-  // Pixel positions range from 0 to width, 0 to height.
-  *u = (int) (x * width);
-  *v = (int) (y * height);
+  double upos, vpos;
 
+  if ((u == NULL) || (v == NULL) || (width < 1) || (height < 1) ||
+      !isfinite (x) || !isfinite (y)) return (EXIT_FAILURE);
+
+  // Pixel indices run from 0 through width - 1 and height - 1. Chromaticities
+  // outside [0,1] are intentionally allowed here for imaginary RGB primaries;
+  // plot() clips those portions to the bitmap.
+  upos = x * (double) (width - 1);
+  vpos = y * (double) (height - 1);
+  if (!isfinite (upos) || !isfinite (vpos) ||
+      (upos < (double) INT_MIN) || (upos > (double) INT_MAX) ||
+      (vpos < (double) INT_MIN) || (vpos > (double) INT_MAX)) {
+    return (EXIT_FAILURE);
+  }
+
+  *u = (int) lround (upos);
+  *v = (int) lround (vpos);
   return (EXIT_SUCCESS);
 }
 
-// Plot a pixel in bitmap buffer as white.
-// Ranges: 0 <= u <= width, 0 <= v <= height
+// Plot one pixel, clipping coordinates that fall outside the bitmap.
 int
 plot (int u, int v, int *rgb, uint8_t *buffer, int width, int height) {
 
-  int index;
+  size_t index;
 
-  index = (u * 3) + (v * width * 3);
+  if ((rgb == NULL) || (buffer == NULL) || (width <= 0) || (height <= 0)) {
+    return (EXIT_FAILURE);
+  }
+  if ((u < 0) || (u >= width) || (v < 0) || (v >= height)) {
+    return (EXIT_FAILURE);
+  }
 
+  index = ((size_t) u + (size_t) v * (size_t) width) * 3u;
   buffer[index] = (uint8_t) rgb[2];  // B
-  buffer[index + 1] = (uint8_t) rgb[1];  // G
-  buffer[index + 2] = (uint8_t) rgb[0];  // R
-
+  buffer[index + 1u] = (uint8_t) rgb[1];  // G
+  buffer[index + 2u] = (uint8_t) rgb[0];  // R
   return (EXIT_SUCCESS);
 }
 
@@ -842,55 +1063,31 @@ draw_num (int x0, int y0, char *text, int *rgb, uint8_t *buffer, int width, int 
 int
 draw_line (int *p1, int *p2, int *rgb, uint8_t *buffer, int width, int height) {
 
-  int i, j;
-  double slope, intercept;
+  int64_t x0, y0, x1, y1, dx, dy, sx, sy, err, e2;
 
-  // Non-vertical line
-  if (p1[0] != p2[0]) {
+  if ((p1 == NULL) || (p2 == NULL) || (rgb == NULL) || (buffer == NULL)) {
+    return (EXIT_FAILURE);
+  }
 
-    // Calculate slope and intercept of line.
-    slope = ((double) p2[1] - (double) p1[1]) / ((double) p2[0] - (double) p1[0]);
-    intercept = (double) p2[1] - (slope * (double) p2[0]);
+  x0 = p1[0]; y0 = p1[1];
+  x1 = p2[0]; y1 = p2[1];
+  dx = llabs (x1 - x0);
+  sx = (x0 < x1) ? 1 : -1;
+  dy = -llabs (y1 - y0);
+  sy = (y0 < y1) ? 1 : -1;
+  err = dx + dy;
 
-    // Plot line.
-    // Choose to iterate on horizontal or vertical px depending upon which has greatest difference.
-    // This ensures densely populated pixel lines.
-    if (fabs (p2[0] - p1[0]) > fabs (p2[1] - p1[1])) {
-      if (p2[0] > p1[0]) {
-        for (i=p1[0]; i<p2[0]; i++) {
-          j = (int) ((((double) i * slope) + intercept) + 0.5);
-          plot (i, j, rgb, buffer, width, height);
-        }
-      } else {
-        for (i=p2[0]; i<p1[0]; i++) {
-          j = (int) ((((double) i * slope) + intercept) + 0.5);
-          plot (i, j, rgb, buffer, width, height);
-        }
-      }
-    } else {
-      if (p2[1] > p1[1]) {
-        for (j=p1[1]; j<p2[1]; j++) {
-          i = (int) (((double) j - intercept) / slope);
-          plot (i, j, rgb, buffer, width, height);
-        }
-      } else {
-        for (j=p2[1]; j<p1[1]; j++) {
-          i = (int) (((double) j - intercept) / slope);
-          plot (i, j, rgb, buffer, width, height);
-        }
-      }
+  for (;;) {
+    plot ((int) x0, (int) y0, rgb, buffer, width, height);
+    if ((x0 == x1) && (y0 == y1)) break;
+    e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x0 += sx;
     }
-
-  // Vertical line
-  } else {
-    if (p2[1] > p1[1]) {
-      for (j=p1[1]; j<p2[1]; j++) {
-        plot (p1[0], j, rgb, buffer, width, height);
-      }
-    } else {
-      for (j=p2[1]; j<p1[1]; j++) {
-        plot (p1[0], j, rgb, buffer, width, height);
-      }
+    if (e2 <= dx) {
+      err += dx;
+      y0 += sy;
     }
   }
 
@@ -920,67 +1117,83 @@ within_polygon (double u, double v, double **uv, int n) {
 int
 bmp (char *filename, uint8_t *buffer, int width, int height) {
 
-  int row_size, image_size, x, y, c;
-  uint8_t padding[3] = {0, 0, 0};  // Padding to make each row 4 bytes aligned
+  int x, y;
+  size_t row_size, image_size, file_size, c, padding_len;
+  uint8_t padding[3] = {0, 0, 0};
   FILE *fo;
 
-  // Open output file.
-  fo = fopen (filename, "r");
+  if ((filename == NULL) || (buffer == NULL) || (width <= 0) || (height <= 0)) {
+    return (EXIT_FAILURE);
+  }
+
+  row_size = ((size_t) width * 3u + 3u) & ~(size_t) 3u;
+  if ((size_t) height > SIZE_MAX / row_size) {
+    fprintf (stderr, "ERROR: BMP image size overflows size_t.\n");
+    return (EXIT_FAILURE);
+  }
+  image_size = row_size * (size_t) height;
+  if (image_size > UINT32_MAX - 54u) {
+    fprintf (stderr, "ERROR: BMP is too large for the 32-bit BMP file-size fields.\n");
+    return (EXIT_FAILURE);
+  }
+  file_size = 54u + image_size;
+  padding_len = row_size - (size_t) width * 3u;
+
+  fo = fopen (filename, "rb");
   if (fo != NULL) {
+    fclose (fo);
     fprintf (stderr, "Output file %s already exists.\n", filename);
-    exit (EXIT_FAILURE);
+    return (EXIT_FAILURE);
   }
   fo = fopen (filename, "wb");
   if (fo == NULL) {
-    printf ("Can't open output file %s.\n", filename);
-    exit (EXIT_FAILURE);
+    fprintf (stderr, "Can't open output file %s.\n", filename);
+    return (EXIT_FAILURE);
   }
 
-  // Calculate the padding required for each row.
-  row_size = (width * 3 + 3) & (~3);  // Each row must be a multiple of 4 bytes
-  image_size = row_size * height;
+  // BMP file header.
+  write_u16_le (fo, 0x4d42);
+  write_u32_le (fo, (uint32_t) file_size);
+  write_u16_le (fo, 0);
+  write_u16_le (fo, 0);
+  write_u32_le (fo, 54);
 
-  // BMP file header
-  write_u16_le (fo, 0x4d42);              // File type, should be "BM"
-  write_u32_le (fo, 54 + image_size);     // Size of the file (bytes)
-  write_u16_le (fo, 0);                   // Reserved (set to 0)
-  write_u16_le (fo, 0);                   // Reserved (set to 0)
-  write_u32_le (fo, 54);                  // Offset (bytes) to the start of the pixel data
+  // BMP information header.
+  write_u32_le (fo, 40);
+  write_s32_le (fo, (int32_t) width);
+  write_s32_le (fo, (int32_t) height);
+  write_u16_le (fo, 1);
+  write_u16_le (fo, 24);
+  write_u32_le (fo, 0);
+  write_u32_le (fo, (uint32_t) image_size);
+  write_s32_le (fo, 7874);
+  write_s32_le (fo, 7874);
+  write_u32_le (fo, 0);
+  write_u32_le (fo, 0);
 
-  // BMP information header
-  write_u32_le (fo, 40);                  // Size of this header (40 bytes)
-  write_s32_le (fo, width);               // Width of the image (px)
-  write_s32_le (fo, height);              // Height of the image (px)
-  write_u16_le (fo, 1);                   // Number of color planes (always 1)
-  write_u16_le (fo, 24);                  // Bits per pixel (24 for RGB)
-  write_u32_le (fo, 0);                   // Compression method (0 for none)
-  write_u32_le (fo, image_size);          // Size of the image data (bytes)
-  write_s32_le (fo, 7874);                // Horizontal resolution (in pixels per meter) (200 DPI)
-  write_s32_le (fo, 7874);                // Vertical resolution (in pixels per meter) (200 DPI)
-  write_u32_le (fo, 0);                   // Number of colors used (0 for 2^24)
-  write_u32_le (fo, 0);                   // Important colors (0 for all)
-
-  // Loop through each row and write the pixels.
-  c = 0;  // Index of buffer array
+  c = 0;
   for (y=0; y<height; y++) {
     for (x=0; x<width; x++) {
-
-      // Write the blue, green, and red values (24-bit color).
-      fputc (buffer[c], fo);  // B
-      c++;
-      fputc (buffer[c], fo);  // G
-      c++;
-      fputc (buffer[c], fo);  // R
-      c++;
+      fputc ((int) buffer[c++], fo);
+      fputc ((int) buffer[c++], fo);
+      fputc ((int) buffer[c++], fo);
     }
-
-    // Write padding, if necessary.
-    fwrite (padding, 1, row_size - width * 3, fo);
+    if ((padding_len > 0u) && (fwrite (padding, 1, padding_len, fo) != padding_len)) {
+      fprintf (stderr, "ERROR: Unable to write BMP row padding.\n");
+      fclose (fo);
+      return (EXIT_FAILURE);
+    }
   }
 
-  // Close output file.
-  fclose (fo);
-
+  if (ferror (fo)) {
+    fprintf (stderr, "ERROR: Unable to write complete BMP file.\n");
+    fclose (fo);
+    return (EXIT_FAILURE);
+  }
+  if (fclose (fo) != 0) {
+    fprintf (stderr, "ERROR: Unable to close BMP output file.\n");
+    return (EXIT_FAILURE);
+  }
   return (EXIT_SUCCESS);
 }
 
@@ -988,8 +1201,8 @@ bmp (char *filename, uint8_t *buffer, int width, int height) {
 void
 write_u16_le (FILE *fo, uint16_t val) {
 
-    fputc (val & 0xff, fo);
-    fputc ((val >> 8) & 0xff, fo);
+    fputc ((int) (val & 0xffu), fo);
+    fputc ((int) ((val >> 8) & 0xffu), fo);
 
 }
 
@@ -997,10 +1210,10 @@ write_u16_le (FILE *fo, uint16_t val) {
 void
 write_u32_le (FILE *fo, uint32_t val) {
 
-    fputc (val & 0xff, fo);
-    fputc ((val >> 8) & 0xff, fo);
-    fputc ((val >> 16) & 0xff, fo);
-    fputc ((val >> 24) & 0xff, fo);
+    fputc ((int) (val & 0xffu), fo);
+    fputc ((int) ((val >> 8) & 0xffu), fo);
+    fputc ((int) ((val >> 16) & 0xffu), fo);
+    fputc ((int) ((val >> 24) & 0xffu), fo);
 
 }
 
@@ -1012,695 +1225,92 @@ write_s32_le (FILE *fo, int32_t val) {
 
 }
 
-// Color primary coordinates for various RGB colorspaces
-// Returns: -1 if invalid selection, 0 if valid selection
-
-// References: Kang, Computational Color Technology (2006)
-//             Pascale, A Review of RGB Color Spaces (2003)
+// Color primary coordinates for RGB spaces and historical RGB primary sets.
+// Coordinates and names are kept in sync with the audited matrix.c data table.
 int
 rgb_primaries (double **p) {
 
-  int choice;
-  double xr, yr, zr, xg, yg, zg, xb, yb, zb;
-  char *temp, *endptr;
+  int choice, i;
+  double zr, zg, zb;
+  char *temp;
+  const RGBSpace *space;
 
-  // Allocate memory for various arrays.
-  temp = allocate_strmem (MAXLEN);
-
-  fprintf (stdout, "\nChoose RGB colorspace:\n");
-  fprintf (stdout, "  1 - sRGB (BT.709)\n");
-  fprintf (stdout, "  2 - Adobe (1998)\n");
-  fprintf (stdout, "  3 - Apple\n");
-  fprintf (stdout, "  4 - Best\n");
-  fprintf (stdout, "  5 - Beta\n");
-  fprintf (stdout, "  6 - Bruse\n");
-  fprintf (stdout, "  7 - CIE 2-deg observer\n");
-  fprintf (stdout, "  8 - CIE 10-deg observer\n");
-  fprintf (stdout, "  9 - ColorMatch\n");
-  fprintf (stdout, " 10 - Don 4\n");
-  fprintf (stdout, " 11 - EBU\n");
-  fprintf (stdout, " 12 - ECI v2\n");
-  fprintf (stdout, " 13 - Ekta Space PS5\n");
-  fprintf (stdout, " 14 - Eureka\n");
-  fprintf (stdout, " 15 - Extended\n");
-  fprintf (stdout, " 16 - Guild\n");
-  fprintf (stdout, " 17 - Ink-jet\n");
-  fprintf (stdout, " 18 - Judd-Wyszecki\n");
-  fprintf (stdout, " 19 - Kress\n");
-  fprintf (stdout, " 20 - Laser (Starkweather)\n");
-  fprintf (stdout, " 21 - NTSC (1953)\n");
-  fprintf (stdout, " 22 - PAL / SECAM\n");
-  fprintf (stdout, " 23 - ProPhoto\n");
-  fprintf (stdout, " 24 - RIMM-ROMM\n");
-  fprintf (stdout, " 25 - ROM\n");
-  fprintf (stdout, " 26 - SGI\n");
-  fprintf (stdout, " 27 - SMPTE-C (NTSC 1987)\n");
-  fprintf (stdout, " 28 - SMPTE-240M\n");
-  fprintf (stdout, " 29 - Sony P-22\n");
-  fprintf (stdout, " 30 - Wide-Gamut\n");
-  fprintf (stdout, " 31 - Wright\n");
-  fprintf (stdout, " 32 - Usami\n");
-
+  temp = allocate_strmem (MAX_STRINGLEN);
+  fprintf (stdout, "\nChoose RGB color space / primary set:\n");
+  for (i=0; i<N_RGB_SPACES; i++) {
+    fprintf (stdout, " %2d - %s [%s]\n", i + 1, rgb_spaces[i].name, rgb_spaces[i].source_quality);
+  }
   fprintf (stdout, "\nChoice? ");
   inputtext (temp);
-  errno = 0;
-  choice = (int) strtol (temp, &endptr, 10);
-  if ((errno == ERANGE) || (errno == EINVAL) || (endptr == temp)) {
+  if (parse_int_string (temp, &choice) == EXIT_FAILURE) {
     fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
-    exit (EXIT_FAILURE);
+    free (temp);
+    return (-1);
   }
-  switch (choice) {
-
-    // sRGB (BT.709)
-    case 1:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.3000; yg = 0.6000;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // Adobe (1998)
-    case 2:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // Apple
-    case 3:
-      xr = 0.6250; yr = 0.3400;
-      xg = 0.2800; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // Best
-    case 4:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.2150; yg = 0.7750;
-      xb = 0.1300; yb = 0.0350;
-      break;
-
-    // Beta
-    case 5:
-      xr = 0.6888; yr = 0.3112;
-      xg = 0.1986; yg = 0.7551;
-      xb = 0.1265; yb = 0.0352;
-      break;
-
-    // Bruse
-    case 6:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2800; yg = 0.6500;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // CIE 2-deg observer
-    case 7:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.2737; yg = 0.7174;
-      xb = 0.1665; yb = 0.0089;
-      break;
-
-    // CIE 10-deg observer
-    case 8:
-      xr = 0.7232; yr = 0.2768;
-      xg = 0.1248; yg = 0.8216;
-      xb = 0.1616; yb = 0.0134;
-      break;
-
-    // ColorMatch
-    case 9:
-      xr = 0.6300; yr = 0.3400;
-      xg = 0.2950; yg = 0.6050;
-      xb = 0.1500; yb = 0.0750;
-      break;
-
-    // Don
-    case 10:
-      xr = 0.6960; yr = 0.3000;
-      xg = 0.2150; yg = 0.7650;
-      xb = 0.1300; yb = 0.0350;
-      break;
-
-    // EBU
-    case 11:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2900; yg = 0.6000;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // ECI v2
-    case 12:
-      xr = 0.6700; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1400; yb = 0.0800;
-      break;
-
-    // Ekta Space PS5
-    case 13:
-      xr = 0.6950; yr = 0.3050;
-      xg = 0.2600; yg = 0.7000;
-      xb = 0.1100; yb = 0.0050;
-      break;
-
-    // Eureka
-    case 14:
-      xr = 0.6915; yr = 0.3083;
-      xg = 0.0000; yg = 1.0000;
-      xb = 0.1440; yb = 0.0296;
-      break;
-
-    // Extended
-    case 15:
-      xr = 0.7010; yr = 0.2990;
-      xg = 0.1700; yg = 0.7960;
-      xb = 0.1310; yb = 0.0460;
-      break;
-
-    // Guild
-    case 16:
-      xr = 0.7000; yr = 0.3000;
-      xg = 0.2550; yg = 0.7200;
-      xb = 0.1500; yb = 0.0500;
-      break;
-
-    // Ink-jet
-    case 17:
-      xr = 0.7000; yr = 0.3000;
-      xg = 0.2500; yg = 0.7200;
-      xb = 0.1300; yb = 0.0500;
-      break;
-
-    // Judd-Wyszecki
-    case 18:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.0743; yg = 0.8338;
-      xb = 0.1741; yb = 0.0050;
-      break;
-
-    // Kress
-    case 19:
-      xr = 0.6915; yr = 0.3083;
-      xg = 0.1547; yg = 0.8059;
-      xb = 0.1440; yb = 0.0297;
-      break;
-
-    // Laser (Starkweather)
-    case 20:
-      xr = 0.7117; yr = 0.2882;
-      xg = 0.0328; yg = 0.8029;
-      xb = 0.1632; yb = 0.0119;
-      break;
-
-    // NTSC (1953)
-    case 21:
-      xr = 0.6700; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1400; yb = 0.0800;
-      break;
-
-    // PAL / SECAM
-    case 22:
-      xr = 0.6400; yr = 0.3300;
-      xg = 0.2900; yg = 0.6000;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // ProPhoto
-    case 23:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.1596; yg = 0.8404;
-      xb = 0.0366; yb = 0.0001;
-      break;
-
-    // RIMM-ROMM
-    case 24:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.1596; yg = 0.8404;
-      xb = 0.0366; yb = 0.0001;
-      break;
-
-    // ROM
-    case 25:
-      xr = 0.8730; yr = 0.1440;
-      xg = 0.1750; yg = 0.9270;
-      xb = 0.0850; yb = 0.0001;
-      break;
-
-    // SGI
-    case 26:
-      xr = 0.6250; yr = 0.3400;
-      xg = 0.2800; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // SMPTE-C (NTSC 1987)
-    case 27:
-      xr = 0.6300; yr = 0.3400;
-      xg = 0.3100; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // SMPTE-240M
-    case 28:
-      xr = 0.6700; yr = 0.3300;
-      xg = 0.2100; yg = 0.7100;
-      xb = 0.1500; yb = 0.0600;
-      break;
-
-    // Sony P-22
-    case 29:
-      xr = 0.6250; yr = 0.3400;
-      xg = 0.2800; yg = 0.5950;
-      xb = 0.1550; yb = 0.0700;
-      break;
-
-    // Wide-Gamut
-    case 30:
-      xr = 0.7347; yr = 0.2653;
-      xg = 0.1152; yg = 0.8264;
-      xb = 0.1566; yb = 0.0177;
-      break;
-
-    // Wright
-    case 31:
-      xr = 0.7260; yr = 0.2740;
-      xg = 0.1547; yg = 0.8059;
-      xb = 0.1440; yb = 0.0297;
-      break;
-
-    // Usami
-    case 32:
-      xr = 0.7347; yr = 0.2653;
-      xg = -0.086; yg = 1.0860;
-      xb = 0.0957; yb = -.0314;
-      break;
-
-    // Unknown
-    default:
-      fprintf (stderr, "Invalid choice.\n");
-      return (-1);
+  if ((choice < 1) || (choice > N_RGB_SPACES)) {
+    fprintf (stderr, "Invalid choice.\n");
+    free (temp);
+    return (-1);
   }
 
-  // Compute z chromaticity coordinate of color primaries.
-  zr = 1.0 - xr - yr;
-  zg = 1.0 - xg - yg;
-  zb = 1.0 - xb - yb;
+  space = &rgb_spaces[choice - 1];
+  zr = 1.0 - space->xr - space->yr;
+  zg = 1.0 - space->xg - space->yg;
+  zb = 1.0 - space->xb - space->yb;
 
-  // Populate color primaries matrix p.
-  p[0][0] = xr;  p[0][1] = xg;  p[0][2] = xb;
-  p[1][0] = yr;  p[1][1] = yg;  p[1][2] = yb;
-  p[2][0] = zr;  p[2][1] = zg;  p[2][2] = zb;
+  p[0][0] = space->xr;  p[0][1] = space->xg;  p[0][2] = space->xb;
+  p[1][0] = space->yr;  p[1][1] = space->yg;  p[1][2] = space->yb;
+  p[2][0] = zr;         p[2][1] = zg;         p[2][2] = zb;
 
-  // Free allocated memory.
   free (temp);
-
-  return (0);  // Success
+  return (0);
 }
 
 // Illuminants - Choose white point.
-// Returns: -1 if invalid selection, 0 if valid selection
-
-// References: 1. Danny Pascale, "A Review of RGB color spaces", Babel Color
-//             2. Equivalent White Light Sources, and CIE Illuminants, HunterLab
-//             3. CIE F-series Spectral Data, CIE 15.2:1986
-//             4. Colorimetry, 4th Edition, CIE 015:2018, DOI: 10.25039/TR.015.2018
-//             5. Tooms - Colour Reproduction in Electronic Imaging Stsrems (2015)
+// Values are kept in sync with the audited matrix.c table; ACES D60-like is
+// explicitly distinguished from a general CIE daylight illuminant.
 int
 illum_white (double *white_xyz) {
 
-  int choice;
-  char *temp, *endptr;
+  int choice, i;
+  char *temp;
+  const WhitePoint *white;
 
-  // Allocate memory for various arrays.
-  temp = allocate_strmem (MAXLEN);
-
+  temp = allocate_strmem (MAX_STRINGLEN);
   fprintf (stdout, "\nChoose display white point for bitmap:\n");
-  fprintf (stdout, "  1 - D65 1931 2-deg - 6504 K - Noon daylight (sRGB, BT.601, BT.709)\n");
-  fprintf (stdout, "  2 - D65 1964 10-deg - 6504 K - Noon daylight\n");
-  fprintf (stdout, "  3 - D50 1931 2-deg - 5003 K - Late afternoon\n");
-  fprintf (stdout, "  4 - D50 1964 10-deg - 5003 K - Late afternoon\n");
-  fprintf (stdout, "  5 - A 1931 2-deg - 2856 K - Tungsten filament\n");
-  fprintf (stdout, "  6 - A 1964 10-deg - 2856 K - Tungsten filament\n");
-  fprintf (stdout, "  7 - B 1931 2-deg - 4874 K - Noon daylight (obsolete)\n");
-  fprintf (stdout, "  8 - C 1931 2-deg - 6774 K - Average daylight\n");
-  fprintf (stdout, "  9 - C 1964 10-deg - 6774 K - Average daylight\n");
-  fprintf (stdout, " 10 - D55 1931 2-deg - 5503 K - Mid-morning / Mid-afternoon\n");
-  fprintf (stdout, " 11 - D55 1964 10-deg - 5503 K - Mid-morning / Mid-afternoon\n");
-  fprintf (stdout, " 12 - D60 1931 2-deg - 5985 K - Daylight\n");
-  fprintf (stdout, " 13 - D75 1931 2-deg - 7504 K - Northern daylight\n");
-  fprintf (stdout, " 14 - D75 1964 10-deg - 7504 K - Northern daylight\n");
-  fprintf (stdout, " 15 - D93 1931 2-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC\n");
-  fprintf (stdout, " 16 - D93 1964 10-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC\n");
-  fprintf (stdout, " 17 - E 1931 2-deg - 5454 K - Equal energy\n");
-  fprintf (stdout, " 18 - E 1964 10-deg - 5454 K - Equal energy\n");
-  fprintf (stdout, " 19 - F1 1931 2-deg - 6430 K - Florescent daylight\n");
-  fprintf (stdout, " 20 - F1 1964 10-deg - 6430 K - Florescent daylight\n");
-  fprintf (stdout, " 21 - F2 1931 2-deg - 4230 K - Cool white fluorescent\n");
-  fprintf (stdout, " 22 - F2 1964 10-deg - 4230 K - Cool white fluorescent\n");
-  fprintf (stdout, " 23 - F3 1931 2-deg - 3450 K - White fluorescent\n");
-  fprintf (stdout, " 24 - F3 1964 10-deg - 3450 K - White fluorescent\n");
-  fprintf (stdout, " 25 - F4 1931 2-deg - 2940 K - Warm white fluorescent\n");
-  fprintf (stdout, " 26 - F4 1964 10-deg - 2940 K - Warm white fluorescent\n");
-  fprintf (stdout, " 27 - F5 1931 2-deg - 6350 K - Daylight fluorescent\n");
-  fprintf (stdout, " 28 - F5 1964 10-deg - 6350 K - Daylight fluorescent\n");
-  fprintf (stdout, " 29 - F6 1931 2-deg - 4150 K - Light white fluorescent\n");
-  fprintf (stdout, " 30 - F6 1964 10-deg - 4150 K - Light white fluorescent\n");
-  fprintf (stdout, " 31 - F7 1931 2-deg - 6500 K - D65 daylight simulator\n");
-  fprintf (stdout, " 32 - F7 1964 10-deg - 6500 K - D65 daylight simulator\n");
-  fprintf (stdout, " 33 - F8 1931 2-deg - 5000 K - D50 simulator, Sylvania F40 Design 50\n");
-  fprintf (stdout, " 34 - F8 1964 10-deg - 5000 K - D50 simulator, Sylvania F40 Design 50\n");
-  fprintf (stdout, " 35 - F9 1931 2-deg - 4150 K - Cool white deluxe fluorescent\n");
-  fprintf (stdout, " 36 - F9 1964 10-deg - 4150 K - Cool white deluxe fluorescent\n");
-  fprintf (stdout, " 37 - F10 1931 2-deg - 5000 K - Philips TL85, Ultralume 50\n");
-  fprintf (stdout, " 38 - F10 1964 10-deg - 5000 K - Philips TL85, Ultralume 50\n");
-  fprintf (stdout, " 39 - F11 1931 2-deg - 4000 K - Philips TL84, Ultralume 40\n");
-  fprintf (stdout, " 40 - F11 1964 10-deg - 4000 K - Philips TL84, Ultralume 40\n");
-  fprintf (stdout, " 41 - F12 1931 2-deg - 3000 K - Philips TL83, Ultralume 30\n");
-  fprintf (stdout, " 42 - F12 1964 10-deg - 3000 K - Philips TL83, Ultralume 30\n");
+  for (i=0; i<N_WHITE_POINTS; i++) {
+    fprintf (stdout, " %2d - %s\n", i + 1, white_points[i].name);
+  }
   fprintf (stdout, "\nChoice? ");
   inputtext (temp);
-  errno = 0;
-  choice = (int) strtol (temp, &endptr, 10);
-  if ((errno == ERANGE) || (errno == EINVAL) || (endptr == temp)) {
+  if (parse_int_string (temp, &choice) == EXIT_FAILURE) {
     fprintf (stderr, "ERROR: Cannot make integer of: %s\n", temp);
-    exit (EXIT_FAILURE);
+    free (temp);
+    return (-1);
   }
-  switch (choice) {
-
-    // D65 1931 2-deg - 6504 K - Noon daylight, BT.601, BT.709, sRGB
-    // This is the sRGB standard white.
-    case 1:
-      white_xyz[0] = 0.31272;  // x
-      white_xyz[1] = 0.32903;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D65 1964 10-deg - 6504 K - Noon daylight
-    case 2:
-      white_xyz[0] = 0.31382;  // x
-      white_xyz[1] = 0.33100;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D50 1931 2-deg - 5003 K - Late afternoon
-    case 3:
-      white_xyz[0] = 0.34567;  // x
-      white_xyz[1] = 0.35850;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D50 1964 10-deg - 5003 K - Late afternoon
-    case 4:
-      white_xyz[0] = 0.34773;  // x
-      white_xyz[1] = 0.35952;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // A 1931 2-deg - 2856 K - Tungsten filament
-    case 5:
-      white_xyz[0] = 0.44758;  // x
-      white_xyz[1] = 0.40745;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // A 1964 10-deg - 2856 K - Tungsten filament
-    case 6:
-      white_xyz[0] = 0.45117;  // x
-      white_xyz[1] = 0.40594;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // B 1931 2-deg - 4874 K - Noon daylight (obsolete)
-    case 7:
-      white_xyz[0] = 0.34830;  // x
-      white_xyz[1] = 0.35160;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // C 1931 2-deg - 6774 K - Average daylight
-    case 8:
-      white_xyz[0] = 0.31006;  // x
-      white_xyz[1] = 0.31615;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // C 1964 10-deg - 6774 K - Average daylight
-    case 9:
-      white_xyz[0] = 0.31039;  // x
-      white_xyz[1] = 0.31905;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D55 1931 2-deg - 5503 K - Mid-morning / Mid-afternoon
-    case 10:
-      white_xyz[0] = 0.33242;  // x
-      white_xyz[1] = 0.34743;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D55 1964 10-deg - 5503 K - Mid-morning / Mid-afternoon
-    case 11:
-      white_xyz[0] = 0.33411;  // x
-      white_xyz[1] = 0.34877;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D60 1931 2-deg - 5985 K - Daylight
-    case 12:
-      white_xyz[0] = 0.3217;
-      white_xyz[1] = 0.3377;
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D75 1931 2-deg - 7504 K - Northern daylight
-    case 13:
-      white_xyz[0] = 0.29902;  // x
-      white_xyz[1] = 0.31485;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D75 1964 10-deg - 7504 K - Northern daylight
-    case 14:
-      white_xyz[0] = 0.29968;  // x
-      white_xyz[1] = 0.31740;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D93 1931 2-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC
-    case 15:
-      white_xyz[0] = 0.28315;  // x
-      white_xyz[1] = 0.29711;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // D93 1964 10-deg - 9305 K - High-efficiency blue phosphor monitors, BT.2035, NTSC
-    case 16:
-      white_xyz[0] = 0.28327;  // x
-      white_xyz[1] = 0.30043;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // E 1931 2-deg - 5454 K - Equal energy
-    case 17:
-      white_xyz[0] = 0.33333;  // x
-      white_xyz[1] = 0.33333;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // E 1964 10-deg - 5454 K - Equal energy
-    case 18:
-      white_xyz[0] = 0.33333;  // x
-      white_xyz[1] = 0.33333;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F1 1931 2-deg - 6430 K - Florescent daylight
-    case 19:
-      white_xyz[0] = 0.31310;  // x
-      white_xyz[1] = 0.33727;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F1 1964 10-deg - 6430 K - Florescent daylight
-    case 20:
-      white_xyz[0] = 0.31811;  // x
-      white_xyz[1] = 0.33559;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F2 1931 2-deg - 4230 K - Cool white fluorescent
-    case 21:
-      white_xyz[0] = 0.37208;  // x
-      white_xyz[1] = 0.37529;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F2 1964 10-deg - 4230 K - Cool white fluorescent
-    case 22:
-      white_xyz[0] = 0.37925;  // x
-      white_xyz[1] = 0.36733;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F3 1931 2-deg - 3450 K - White fluorescent
-    case 23:
-      white_xyz[0] = 0.40910;  // x
-      white_xyz[1] = 0.39430;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F3 1964 10-deg - 3450 K - White fluorescent
-    case 24:
-      white_xyz[0] = 0.41761;  // x
-      white_xyz[1] = 0.38324;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F4 1931 2-deg - 2940 K - Warm white fluorescent
-    case 25:
-      white_xyz[0] = 0.44018;  // x
-      white_xyz[1] = 0.40329;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F4 1964 10-deg - 2940 K - Warm white fluorescent
-    case 26:
-      white_xyz[0] = 0.44920;  // x
-      white_xyz[1] = 0.39074;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F5 1931 2-deg - 6350 K - Daylight fluorescent
-    case 27:
-      white_xyz[0] = 0.31379;  // x
-      white_xyz[1] = 0.34531;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F5 1964 10-deg - 6350 K - Daylight fluorescent
-    case 28:
-      white_xyz[0] = 0.31975;  // x
-      white_xyz[1] = 0.34246;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F6 1931 2-deg - 4150 K - Light white fluorescent
-    case 29:
-      white_xyz[0] = 0.37790;  // x
-      white_xyz[1] = 0.38835;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F6 1964 10-deg - 4150 K - Light white fluorescent
-    case 30:
-      white_xyz[0] = 0.38660;  // x
-      white_xyz[1] = 0.37847;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F7 1931 2-deg - 6500 K - D65 daylight simulator
-    case 31:
-      white_xyz[0] = 0.31292;  // x
-      white_xyz[1] = 0.32933;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F7 1964 10-deg - 6500 K - D65 daylight simulator
-    case 32:
-      white_xyz[0] = 0.31569;  // x
-      white_xyz[1] = 0.32960;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F8 1931 2-deg - 5000 K - D50 simulator, Sylvania F40 Design 50
-    case 33:
-      white_xyz[0] = 0.34588;  // x
-      white_xyz[1] = 0.35875;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F8 1964 10-deg - 5000 K - D50 simulator, Sylvania F40 Design 50
-    case 34:
-      white_xyz[0] = 0.34902;  // x
-      white_xyz[1] = 0.35939;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F9 1931 2-deg - 4150 K - Cool white deluxe fluorescent
-    case 35:
-      white_xyz[0] = 0.37417;  // x
-      white_xyz[1] = 0.37281;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F9 1964 10-deg - 4150 K - Cool white deluxe fluorescent
-    case 36:
-      white_xyz[0] = 0.37829;  // x
-      white_xyz[1] = 0.37045;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F10 1931 2-deg - 5000 K - Philips TL85, Ultralume 50
-    case 37:
-      white_xyz[0] = 0.34609;  // x
-      white_xyz[1] = 0.35986;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F10 1964 10-deg - 5000 K - Philips TL85, Ultralume 50
-    case 38:
-      white_xyz[0] = 0.35090;  // x
-      white_xyz[1] = 0.35444;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F11 1931 2-deg - 4000 K - Philips TL84, Ultralume 40
-    case 39:
-      white_xyz[0] = 0.38052;  // x
-      white_xyz[1] = 0.37713;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F11 1964 10-deg - 4000 K - Philips TL84, Ultralume 40
-    case 40:
-      white_xyz[0] = 0.38541;  // x
-      white_xyz[1] = 0.37123;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F12 1931 2-deg - 3000 K - Philips TL83, Ultralume 30
-    case 41:
-      white_xyz[0] = 0.43695;  // x
-      white_xyz[1] = 0.40441;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    // F12 1964 10-deg - 3000 K - Philips TL83, Ultralume 30
-    case 42:
-      white_xyz[0] = 0.44256;  // x
-      white_xyz[1] = 0.39717;  // y
-      white_xyz[2] = 1.0 - white_xyz[0] - white_xyz[1];  // z
-      break;
-
-    default:
-      fprintf (stderr, "Invalid selection.\n");
-      return (-1);
+  if ((choice < 1) || (choice > N_WHITE_POINTS)) {
+    fprintf (stderr, "Invalid choice.\n");
+    free (temp);
+    return (-1);
   }
 
-  // Free allocated memory.
+  white = &white_points[choice - 1];
+  white_xyz[0] = white->x;
+  white_xyz[1] = white->y;
+  white_xyz[2] = 1.0 - white->x - white->y;
+
   free (temp);
-
-  return (0);  // Success
+  return (0);
 }
 
 // Allocate memory for an array of ints.
 int *
-allocate_intmem (int len) {
+allocate_intmem (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_intmem().\n", len);
+  if (len == 0) {
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_intmem().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -1715,12 +1325,12 @@ allocate_intmem (int len) {
 
 // Allocate memory for an array of pointers to arrays of ints.
 int **
-allocate_intmemp (int len) {
+allocate_intmemp (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_intmemp().\n", len);
+  if (len == 0) {
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_intmemp().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -1735,12 +1345,12 @@ allocate_intmemp (int len) {
 
 // Allocate memory for an array of chars.
 char *
-allocate_strmem (int len) {
+allocate_strmem (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_strmem().\n", len);
+  if (len == 0) {
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_strmem().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -1755,12 +1365,12 @@ allocate_strmem (int len) {
 
 // Allocate memory for an array of doubles.
 double *
-allocate_doublemem (int len) {
+allocate_doublemem (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) { 
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublemem().\n", len);
+  if (len == 0) { 
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublemem().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -1775,12 +1385,12 @@ allocate_doublemem (int len) {
 
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
-allocate_doublememp (int len) {
+allocate_doublememp (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_doublememp().\n", len);
+  if (len == 0) {
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublememp().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -1795,12 +1405,12 @@ allocate_doublememp (int len) {
 
 // Allocate memory for an array of unsigned chars.
 uint8_t *
-allocate_ustrmem (int len) {
+allocate_ustrmem (size_t len) {
 
   void *tmp;
 
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_ustrmem().\n", len);
+  if (len == 0) {
+    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_ustrmem().\n", len);
     exit (EXIT_FAILURE);
   }
 
@@ -1811,4 +1421,36 @@ allocate_ustrmem (int len) {
     fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_ustrmem().\n");
     exit (EXIT_FAILURE);
   }
+}
+
+
+// Return byte size for a 24-bit RGB image after checking multiplication overflow.
+size_t
+image_buffer_size (int width, int height) {
+
+  size_t pixels, row_size;
+
+  if ((width <= 0) || (height <= 0)) {
+    fprintf (stderr, "ERROR: Invalid image dimensions %d x %d.\n", width, height);
+    exit (EXIT_FAILURE);
+  }
+  if ((size_t) width > SIZE_MAX / (size_t) height) {
+    fprintf (stderr, "ERROR: Image dimensions overflow size_t.\n");
+    exit (EXIT_FAILURE);
+  }
+  pixels = (size_t) width * (size_t) height;
+  if (pixels > SIZE_MAX / 3u) {
+    fprintf (stderr, "ERROR: RGB image byte count overflows size_t.\n");
+    exit (EXIT_FAILURE);
+  }
+
+  // The program writes a classic BMP whose file-size and image-size fields are
+  // 32-bit unsigned integers. Reject dimensions that can never be represented.
+  row_size = ((size_t) width * 3u + 3u) & ~(size_t) 3u;
+  if ((size_t) height > ((size_t) UINT32_MAX - 54u) / row_size) {
+    fprintf (stderr, "ERROR: Image is too large for a classic 32-bit-size BMP file.\n");
+    exit (EXIT_FAILURE);
+  }
+
+  return (pixels * 3u);
 }
