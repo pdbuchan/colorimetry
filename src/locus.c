@@ -769,10 +769,12 @@ parse_cmf_record (const char *line, double *values) {
 }
 
 // Read a single line of text from a csv text file.
-// Convert commas to spaces.
+// The terminating line-feed is retained when one is present in the input.
+// Carriage returns are discarded so LF and CRLF input are handled identically.
+// Converts commas to spaces.
 //
 // Returns:
-//   0  - line successully read
+//   0  - line successfully read
 //  -1  - EOF encountered before any characters were read
 //  -2  - line is too long for the supplied buffer
 //  -3  - invalid arguments or input error

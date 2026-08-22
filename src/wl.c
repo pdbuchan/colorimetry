@@ -557,25 +557,27 @@ parse_cmf_record (const char *line, double *values) {
 }
 
 // Read a single line of text from a csv text file.
-// Convert commas to spaces.
+// The terminating line-feed is retained when one is present in the input.
+// Carriage returns are discarded so LF and CRLF input are handled identically.
+// Converts commas to spaces.
 //
 // Returns:
-//   0  - line successully read
+//   0  - line successfully read
 //  -1  - EOF encountered before any characters were read
 //  -2  - line is too long for the supplied buffer
 //  -3  - invalid arguments or input error
 int
 readline (FILE *fi, char *line, int limit) {
-  
+
   int ch, i;
-  
+
   if ((fi == NULL) || (line == NULL) || (limit < 2)) {
     return (-3);
   }
-  
+
   i = 0;
   for (;;) {
-    
+
     ch = fgetc (fi);
 
     // End of file reached.
@@ -592,7 +594,7 @@ readline (FILE *fi, char *line, int limit) {
         line[0] = '\0';
         return (-1);
       }
-    
+
       // Accept a final line that does not end with a line-feed.
       line[i] = '\0';
       return (0);
