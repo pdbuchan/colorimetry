@@ -32,7 +32,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <inttypes.h>  // uint8_t
+#include <stdint.h>
 #include <string.h>
 #include <math.h>  // for fabs(), pow()
 #include <errno.h>
