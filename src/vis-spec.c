@@ -531,8 +531,7 @@ inputtext (char *text) {
       ch = getchar ();
     }
 
-    fprintf (stderr, "Input text is too long; maximum is %d characters.\n",
-             MAX_STRINGLEN - 1);
+    fprintf (stderr, "Input text is too long; maximum is %d characters.\n", MAX_STRINGLEN - 1);
     exit (EXIT_FAILURE);
   }
 
@@ -588,47 +587,85 @@ parse_cmf_record (const char *line, double *values) {
   return (1);
 }
 
-// Read one physical line from a CSV/text file, converting commas to spaces.
-// Returns 0 for a line, -1 for EOF, -2 for an overlong line, and -3 for I/O error.
+// Read a single line of text from a csv text file.
+// Convert commas to spaces.
+//
+// Returns:
+//   0  - line successully read
+//  -1  - EOF encountered before any characters were read
+//  -2  - line is too long for the supplied buffer
+//  -3  - invalid arguments or input error
 int
 readline (FILE *fi, char *line, int limit) {
-
-  size_t i, len;
-  int ch;
-
-  if ((fi == NULL) || (line == NULL) || (limit < 2)) return (-3);
-
-  if (fgets (line, limit, fi) == NULL) {
-    return (feof (fi) ? -1 : -3);
+  
+  int ch, i;
+  
+  if ((fi == NULL) || (line == NULL) || (limit < 2)) {
+    return (-3);
   }
-
-  len = strlen (line);
-  if ((len > 0u) && (line[len - 1u] == '\n')) {
-    line[--len] = '\0';
-  } else {
-    // fgets() filled the buffer or reached EOF without a newline. Peek one byte
-    // to distinguish a valid final/exact-fit line from a genuinely overlong one.
+  
+  i = 0;
+  for (;;) {
+    
     ch = fgetc (fi);
-    if (ch != EOF) {
-      if (ch != '\n') {
-        while (((ch = fgetc (fi)) != '\n') && (ch != EOF)) {
-        }
-        if (ferror (fi)) return (-3);
+
+    // End of file reached.
+    if (ch == EOF) {
+
+      // File stream error encountered.
+      if (ferror (fi)) {
+        line[0] = '\0';
+        return (-3);
+      }
+
+      // No characters were read for this line.
+      if (i == 0) {
+        line[0] = '\0';
+        return (-1);
+      }
+    
+      // Accept a final line that does not end with a line-feed.
+      line[i] = '\0';
+      return (0);
+    }
+
+    // Ignore carriage returns so CRLF input is treated as LF input.
+    if (ch == '\r') {
+      continue;
+    }
+
+    // Convert a comma to a space.
+    if (ch == ',') ch = ' ';
+
+    // Found a line-feed. Retain it.
+    if (ch == '\n') {
+
+      // Line too long for supplied buffer.
+      if (i >= (limit - 1)) {
+        line[limit - 1] = '\0';
         return (-2);
       }
-    } else if (ferror (fi)) {
-      return (-3);
+
+      line[i++] = '\n';
+      line[i] = '\0';
+      return (0);
     }
-  }
 
-  if ((len > 0u) && (line[len - 1u] == '\r')) {
-    line[--len] = '\0';
-  }
-  for (i=0u; i<len; i++) {
-    if (line[i] == ',') line[i] = ' ';
-  }
+    // Reserve one byte for the terminating null character. If the line is too
+    // long, discard the rest of the physical line so the next call starts at
+    // the beginning of the following line.
+    if (i >= (limit - 1)) {
+      line[limit - 1] = '\0';
+      while ((ch = fgetc (fi)) != '\n' && ch != EOF) {
+      }
+      if ((ch == EOF) && ferror (fi)) {
+        return (-3);
+      }
+      return (-2);
+    }
 
-  return (0);
+    line[i++] = (char) ch;
+  }
 }
 
 // Count validated numeric CMF rows.
@@ -650,7 +687,7 @@ count_cmf_rows (const char *filename) {
   count = 0;
   while ((status = readline (fi, line, MAX_STRINGLEN)) != -1) {
     if (status == -2) {
-      fprintf (stderr, "ERROR: Line in color-matching file exceeds %d characters.\n", MAX_STRINGLEN - 1);
+      fprintf (stderr, "ERROR: Line in color-matching file does not fit in the %d-byte input buffer.\n", MAX_STRINGLEN);
       fclose (fi);
       return (-1);
     }
@@ -700,7 +737,7 @@ load_cmf (int nlines, const char *filename, double **cmxyz) {
   i = 0;
   while ((status = readline (fi, line, MAX_STRINGLEN)) != -1) {
     if (status == -2) {
-      fprintf (stderr, "ERROR: Line in color-matching file exceeds %d characters.\n", MAX_STRINGLEN - 1);
+      fprintf (stderr, "ERROR: Line in color-matching file does not fit in the %d-byte input buffer.\n", MAX_STRINGLEN);
       fclose (fi);
       return (EXIT_FAILURE);
     }

@@ -526,8 +526,7 @@ inputtext (char *text) {
       ch = getchar ();
     }
 
-    fprintf (stderr, "Input text is too long; maximum is %d characters.\n",
-             MAX_STRINGLEN - 1);
+    fprintf (stderr, "Input text is too long; maximum is %d characters.\n", MAX_STRINGLEN - 1);
     exit (EXIT_FAILURE);
   }
 

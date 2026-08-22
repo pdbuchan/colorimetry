@@ -234,8 +234,10 @@ main (void) {
 
   int i, j, nlines, narray, *rgb, width, height, count, u, v;
   int **uv, add_axes, mark_white, uborder, vborder, mark_rgb;
+  int left_index, right_index, min_v, max_u;
   int *point1_uv, *point2_uv, fill_srgb, axes_width, axes_height;
   double INTERVAL, **cmxyz, lambda, **xyzbar, **xyz, range, sample_count, sum;
+  double u_centroid, v_centroid;
   double *white_xyz, val, **p, **polygon, *xyzvector, *rgb_double;
   uint8_t *buffer, *buffer2;
   char *filename, *temp;
@@ -417,8 +419,45 @@ main (void) {
     plot (uv[i][0], uv[i][1], rgb, buffer, width, height);
   }
 
-  // The line of purples directly joins the two wavelength endpoints of the spectral locus.
-  draw_line (uv[0], uv[count - 1], rgb, buffer, width, height);
+  // Calculate the centroid of the generated spectral locus samples.
+  u_centroid = 0.0;
+  v_centroid = 0.0;
+  for (i=0; i<count; i++) {
+    u_centroid += (double) uv[i][0];
+    v_centroid += (double) uv[i][1];
+  }
+  u_centroid /= (double) count;
+  v_centroid /= (double) count;
+
+  // Find the lower end of the locus to the right of the centroid.
+  right_index = -1;
+  min_v = height;
+  for (i=0; i<count; i++) {
+    if (((double) uv[i][0] > u_centroid) && (uv[i][1] < min_v)) {
+      min_v = uv[i][1];
+      right_index = i;
+    }
+  }
+
+  // Find the other end of the locus to the left and below the centroid.
+  left_index = -1;
+  max_u = -1;
+  for (i=0; i<count; i++) {
+    if (((double) uv[i][1] < v_centroid) &&
+        ((double) uv[i][0] < u_centroid) &&
+        (uv[i][0] > max_u)) {
+      max_u = uv[i][0];
+      left_index = i;
+    }
+  }
+
+  if ((left_index < 0) || (right_index < 0)) {
+    fprintf (stderr, "ERROR: Unable to determine endpoints of spectral locus.\n");
+    exit (EXIT_FAILURE);
+  }
+
+  // Plot the line of purples between the geometrical endpoints of the spectral locus.
+  draw_line (uv[left_index], uv[right_index], rgb, buffer, width, height);
 
   // Fill in sRGB color gamut if requested.
   if (fill_srgb) {
@@ -673,8 +712,7 @@ inputtext (char *text) {
       ch = getchar ();
     }
 
-    fprintf (stderr, "Input text is too long; maximum is %d characters.\n",
-             MAX_STRINGLEN - 1);
+    fprintf (stderr, "Input text is too long; maximum is %d characters.\n", MAX_STRINGLEN - 1);
     exit (EXIT_FAILURE);
   }
 
@@ -732,38 +770,83 @@ parse_cmf_record (const char *line, double *values) {
 
 // Read a single line of text from a csv text file.
 // Convert commas to spaces.
-// Returns -1 if EOF is encountered.
+//
+// Returns:
+//   0  - line successully read
+//  -1  - EOF encountered before any characters were read
+//  -2  - line is too long for the supplied buffer
+//  -3  - invalid arguments or input error
 int
 readline (FILE *fi, char *line, int limit) {
 
   int ch, i;
 
-  if ((fi == NULL) || (line == NULL) || (limit < 2)) return (-2);
+  if ((fi == NULL) || (line == NULL) || (limit < 2)) {
+    return (-3);
+  }
 
   i = 0;
-  while (i < limit - 1) {
+  for (;;) {
+
     ch = fgetc (fi);
 
+    // End of file reached.
     if (ch == EOF) {
-      if (i == 0) return (-1);
+
+      // File stream error encountered.
+      if (ferror (fi)) {
+        line[0] = '\0';
+        return (-3);
+      }
+
+      // No characters were read for this line.
+      if (i == 0) {
+        line[0] = '\0';
+        return (-1);
+      }
+
+      // Accept a final line that does not end with a line-feed.
       line[i] = '\0';
       return (0);
     }
-    if (ch == '\r') continue;
+
+    // Ignore carriage returns so CRLF input is treated as LF input.
+    if (ch == '\r') {
+      continue;
+    }
+
+    // Convert a comma to a space.
     if (ch == ',') ch = ' ';
+
+    // Found a line-feed. Retain it.
     if (ch == '\n') {
+
+      // Line too long for supplied buffer.
+      if (i >= (limit - 1)) {
+        line[limit - 1] = '\0';
+        return (-2);
+      }
+
+      line[i++] = '\n';
       line[i] = '\0';
       return (0);
+    }
+
+    // Reserve one byte for the terminating null character. If the line is too
+    // long, discard the rest of the physical line so the next call starts at
+    // the beginning of the following line.
+    if (i >= (limit - 1)) {
+      line[limit - 1] = '\0';
+      while ((ch = fgetc (fi)) != '\n' && ch != EOF) {
+      }
+      if ((ch == EOF) && ferror (fi)) {
+        return (-3);
+      }
+      return (-2);
     }
 
     line[i++] = (char) ch;
   }
-
-  // A physical line that does not fit is rejected rather than silently truncated.
-  line[i] = '\0';
-  while ((ch = fgetc (fi)) != '\n' && ch != EOF) {
-  }
-  return (-2);
 }
 
 // Choose color-matching function (CMF).
@@ -834,7 +917,13 @@ choose_cmf (int *nlines, char *filename, double *INTERVAL) {
   *nlines = 0;
   while ((status = readline (fi, temp, MAX_STRINGLEN)) != -1) {
     if (status == -2) {
-      fprintf (stderr, "ERROR: Line in color-matching file exceeds %d characters.\n", MAX_STRINGLEN - 1);
+      fprintf (stderr, "ERROR: Line in color-matching file does not fit in the %d-byte input buffer.\n", MAX_STRINGLEN);
+      fclose (fi);
+      free (temp);
+      exit (EXIT_FAILURE);
+    }
+    if (status == -3) {
+      fprintf (stderr, "ERROR: Unable to read color-matching file.\n");
       fclose (fi);
       free (temp);
       exit (EXIT_FAILURE);
@@ -885,7 +974,13 @@ load_cmf (int nlines, char *filename, double **cmxyz) {
   i = 0;
   while ((status = readline (fi, temp, MAX_STRINGLEN)) != -1) {
     if (status == -2) {
-      fprintf (stderr, "ERROR: Line in color-matching file exceeds %d characters.\n", MAX_STRINGLEN - 1);
+      fprintf (stderr, "ERROR: Line in color-matching file does not fit in the %d-byte input buffer.\n", MAX_STRINGLEN);
+      fclose (fi);
+      free (temp);
+      exit (EXIT_FAILURE);
+    }
+    if (status == -3) {
+      fprintf (stderr, "ERROR: Unable to read color-matching file.\n");
       fclose (fi);
       free (temp);
       exit (EXIT_FAILURE);
