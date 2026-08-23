@@ -989,23 +989,25 @@ bmp (const uint8_t *buffer, int width, int height) {
     return (EXIT_FAILURE);
   }
 
-  write_u16_le (fo, 0x4d42u);
-  write_u32_le (fo, (uint32_t) (54u + image_size));
-  write_u16_le (fo, 0u);
-  write_u16_le (fo, 0u);
-  write_u32_le (fo, 54u);
+  // BMP file header
+  write_u16_le (fo, 0x4d42);                // File type, should be "BM"
+  write_u32_le (fo, (uint32_t) (54u + image_size));  // Size of the file (bytes)
+  write_u16_le (fo, 0);                     // Reserved (set to 0)
+  write_u16_le (fo, 0);                     // Reserved (set to 0)
+  write_u32_le (fo, 54);                    // Offset (bytes) to the start of the pixel data
 
-  write_u32_le (fo, 40u);
-  write_s32_le (fo, (int32_t) width);
-  write_s32_le (fo, (int32_t) height);
-  write_u16_le (fo, 1u);
-  write_u16_le (fo, 24u);
-  write_u32_le (fo, 0u);
-  write_u32_le (fo, (uint32_t) image_size);
-  write_s32_le (fo, 7874);
-  write_s32_le (fo, 7874);
-  write_u32_le (fo, 0u);
-  write_u32_le (fo, 0u);
+  // BMP information header
+  write_u32_le (fo, 40);                    // Size of this header (40 bytes)
+  write_s32_le (fo, (int32_t) width);       // Width of the image (px)
+  write_s32_le (fo, (int32_t) height);      // Height of the image (px)
+  write_u16_le (fo, 1);                     // Number of color planes (always 1)
+  write_u16_le (fo, 24);                    // Bits per pixel (24 for RGB)
+  write_u32_le (fo, 0);                     // Compression method (0 for none)
+  write_u32_le (fo, (uint32_t) image_size);  // Size of the image data (bytes)
+  write_s32_le (fo, 7874);                  // Horizontal resolution (in pixels per meter) (200 DPI)
+  write_s32_le (fo, 7874);                  // Vertical resolution (in pixels per meter) (200 DPI)
+  write_u32_le (fo, 0);                     // Number of colors used (0 for 2^24)
+  write_u32_le (fo, 0);                     // Important colors (0 for all)
 
   c = 0u;
   for (y=0; y<height; y++) {

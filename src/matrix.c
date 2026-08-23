@@ -273,15 +273,34 @@ main (void) {
   }
   fprintf (stdout, "\n");
 
-// Test to see if p * pinv = identity vector.
 /*
-double v;
-  for (i=0; i<3; i++) {
-    v = 0.0;
-    for (j=0; j<3; j++) {
-      v += p[i][j] * pinv[j][i];
+  // Test to verify that p * pinv is the identity matrix.
+  double v, expected;
+  int identity_ok;
+
+  identity_ok = 1;
+  fprintf (stdout, "Test of p * pinv (should be the identity matrix):\n");
+  for (i = 0; i < 3; i++) {
+    fprintf (stdout, "  ");
+    for (j = 0; j < 3; j++) {
+      v = 0.0;
+      for (k = 0; k < 3; k++) {
+        v += p[i][k] * pinv[k][j];
+      }
+      fprintf (stdout, "%0.10lf ", v);
+
+      // Diagonal elements should equal 1; off-diagonal elements should equal 0.
+      expected = (i == j) ? 1.0 : 0.0;
+      if (fabs (v - expected) > 1e-12) {
+        identity_ok = 0;
+      }
     }
-    fprintf (stdout, "%0.4lf\n", v);
+    fprintf (stdout, "\n");
+  }
+  if (identity_ok) {
+    fprintf (stdout, "p * pinv is the identity matrix within the test tolerance.\n\n");
+  } else {
+    fprintf (stdout, "ERROR: p * pinv is not the identity matrix within the test tolerance.\n\n");
   }
 */
 
