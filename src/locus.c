@@ -218,6 +218,7 @@ void write_u32_le (FILE *, uint32_t);
 void write_s32_le (FILE *, int32_t);
 int rgb_primaries (double **);
 int illum_white (double *);
+static void *allocate_mem (size_t, size_t, const char *);
 int *allocate_intmem (size_t);
 int **allocate_intmemp (size_t);
 char *allocate_strmem (size_t);
@@ -1429,126 +1430,60 @@ illum_white (double *white_xyz) {
   return (0);
 }
 
-// Allocate memory for an array of ints.
-int *
-allocate_intmem (size_t len) {
+static void *
+allocate_mem (size_t len, size_t item_size, const char *name) {
 
   void *tmp;
 
-  if (len == 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_intmem().\n", len);
+  if (len == 0 || item_size == 0 || len > SIZE_MAX / item_size) {
+    fprintf (stderr, "Cannot allocate memory for %s: invalid size in allocate_mem().\n", name);
+    exit (EXIT_FAILURE); 
+  }
+
+  tmp = calloc (len, item_size);
+  if (tmp == NULL) {
+    fprintf (stderr, "Cannot allocate memory for %s in allocate_mem().\n", name);
     exit (EXIT_FAILURE);
   }
 
-  tmp = calloc (len, sizeof (int));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_intmem().\n");
-    exit (EXIT_FAILURE);
-  } 
+  return tmp;
+}
+
+// Allocate memory for an array of ints.
+int *
+allocate_intmem (size_t len) {
+  return allocate_mem (len, sizeof (int), "array of ints");
 }
 
 // Allocate memory for an array of pointers to arrays of ints.
 int **
 allocate_intmemp (size_t len) {
-
-  void *tmp;
-
-  if (len == 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_intmemp().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (int *));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_intmemp().\n");
-    exit (EXIT_FAILURE);
-  }
+  return allocate_mem (len, sizeof (int *), "array of pointers to arrays of ints");
 }
 
-// Allocate memory for an array of chars.
+// Allocate memory for an array of chars (i.e., a character string).
 char *
 allocate_strmem (size_t len) {
-
-  void *tmp;
-
-  if (len == 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_strmem().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (char));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_strmem().\n");
-    exit (EXIT_FAILURE);
-  } 
+  return allocate_mem (len, sizeof (char), "character array");
 }
 
 // Allocate memory for an array of doubles.
 double *
 allocate_doublemem (size_t len) {
-
-  void *tmp;
-
-  if (len == 0) { 
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublemem().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (double));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublemem().\n");
-    exit (EXIT_FAILURE);
-  } 
+  return allocate_mem (len, sizeof (double), "array of doubles");
 }
 
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
 allocate_doublememp (size_t len) {
-
-  void *tmp;
-
-  if (len == 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublememp().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (double *));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublememp().\n");
-    exit (EXIT_FAILURE);
-  } 
+  return allocate_mem (len, sizeof (double *), "array of pointers to arrays of doubles");
 }
 
-// Allocate memory for an array of unsigned chars.
+// Allocate memory for an array of uint8_t.
 uint8_t *
 allocate_ustrmem (size_t len) {
-
-  void *tmp;
-
-  if (len == 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_ustrmem().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (uint8_t));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_ustrmem().\n");
-    exit (EXIT_FAILURE);
-  }
+  return allocate_mem (len, sizeof (uint8_t), "array of uint8_t");
 }
-
 
 // Return byte size for a 24-bit RGB image after checking multiplication overflow.
 size_t

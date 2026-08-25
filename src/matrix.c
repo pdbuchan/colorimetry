@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <math.h>
 #include <errno.h>
 #include <ctype.h>
@@ -36,6 +37,7 @@ int rgb_primaries (double **, int *);
 int illum_white (double *, int);
 int gaussjordan (int, double **);
 int parse_int_string (const char *, int *);
+static void *allocate_mem (size_t, size_t, const char *);
 double *allocate_doublemem (size_t);
 double **allocate_doublememp (size_t);
 char *allocate_strmem (size_t);
@@ -697,62 +699,39 @@ illum_white (double *white_xyz, int rgb_index) {
   return (0);
 }
 
-// Allocate memory for an array of doubles.
-double *
-allocate_doublemem (size_t len) {
+static void *
+allocate_mem (size_t len, size_t item_size, const char *name) {
 
   void *tmp;
 
-  if (len == 0) { 
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublemem().\n", len);
+  if (len == 0 || item_size == 0 || len > SIZE_MAX / item_size) {
+    fprintf (stderr, "Cannot allocate memory for %s: invalid size in allocate_mem().\n", name);
+    exit (EXIT_FAILURE); 
+  }
+
+  tmp = calloc (len, item_size);
+  if (tmp == NULL) {
+    fprintf (stderr, "Cannot allocate memory for %s in allocate_mem().\n", name);
     exit (EXIT_FAILURE);
   }
 
-  tmp = calloc (len, sizeof (double));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublemem().\n");
-    exit (EXIT_FAILURE);
-  }
+  return tmp;
+}
+
+// Allocate memory for an array of doubles.
+double *
+allocate_doublemem (size_t len) {
+  return allocate_mem (len, sizeof (double), "array of doubles");
 } 
   
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
 allocate_doublememp (size_t len) {
-
-  void *tmp;
-
-  if (len == 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_doublememp().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (double *));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_doublememp().\n");
-    exit (EXIT_FAILURE);
-  } 
+  return allocate_mem (len, sizeof (double *), "array of pointers to arrays of doubles");
 }
 
-// Allocate memory for an array of chars.
+// Allocate memory for an array of chars (i.e., a character string).
 char *
 allocate_strmem (size_t len) {
-
-  void *tmp;
-
-  if (len == 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %zu in allocate_strmem().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = calloc (len, sizeof (char));
-  if (tmp != NULL) {
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array in allocate_strmem().\n");
-    exit (EXIT_FAILURE);
-  }
+  return allocate_mem (len, sizeof (char), "array of chars");
 }

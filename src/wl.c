@@ -51,6 +51,7 @@ int load_cmf (int, const char *, double **);
 int gaussjordan (int, double **);
 int cmf (double, int, double **, double *);
 int illum_white (double *);
+static void *allocate_mem (size_t, size_t, const char *);
 int *allocate_intmem (size_t);
 char *allocate_strmem (size_t);
 double *allocate_doublemem (size_t);
@@ -891,75 +892,46 @@ illum_white (double *white_xyz) {
   return (0);
 }
 
+static void *
+allocate_mem (size_t len, size_t item_size, const char *name) {
+
+  void *tmp;
+
+  if (len == 0 || item_size == 0 || len > SIZE_MAX / item_size) {
+    fprintf (stderr, "Cannot allocate memory for %s: invalid size in allocate_mem().\n", name);
+    exit (EXIT_FAILURE); 
+  }
+
+  tmp = calloc (len, item_size);
+  if (tmp == NULL) {
+    fprintf (stderr, "Cannot allocate memory for %s in allocate_mem().\n", name);
+    exit (EXIT_FAILURE);
+  }
+
+  return tmp;
+}
+
 // Allocate memory for an array of ints.
 int *
 allocate_intmem (size_t len) {
-
-  int *tmp;
-
-  if (len == 0u) {
-    fprintf (stderr, "ERROR: Cannot allocate zero-length int array.\n");
-    exit (EXIT_FAILURE);
-  }
-  tmp = calloc (len, sizeof (*tmp));
-  if (tmp == NULL) {
-    fprintf (stderr, "ERROR: Cannot allocate memory for int array.\n");
-    exit (EXIT_FAILURE);
-  }
-  return (tmp);
+  return allocate_mem (len, sizeof (int), "array of ints");
 }
 
-// Allocate memory for an array of chars.
+// Allocate memory for an array of chars (i.e., a character string).
 char *
 allocate_strmem (size_t len) {
-
-  char *tmp;
-
-  if (len == 0u) {
-    fprintf (stderr, "ERROR: Cannot allocate zero-length string.\n");
-    exit (EXIT_FAILURE);
-  }
-  tmp = calloc (len, sizeof (*tmp));
-  if (tmp == NULL) {
-    fprintf (stderr, "ERROR: Cannot allocate memory for string.\n");
-    exit (EXIT_FAILURE);
-  }
-  return (tmp);
+  return allocate_mem (len, sizeof (char), "array of chars");
 }
 
 // Allocate memory for an array of doubles.
 double *
 allocate_doublemem (size_t len) {
-
-  double *tmp;
-
-  if (len == 0u) {
-    fprintf (stderr, "ERROR: Cannot allocate zero-length double array.\n");
-    exit (EXIT_FAILURE);
-  }
-  tmp = calloc (len, sizeof (*tmp));
-  if (tmp == NULL) {
-    fprintf (stderr, "ERROR: Cannot allocate memory for double array.\n");
-    exit (EXIT_FAILURE);
-  }
-  return (tmp);
+  return allocate_mem (len, sizeof (double), "array of doubles");
 }
 
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
 allocate_doublememp (size_t len) {
-
-  double **tmp;
-
-  if (len == 0u) {
-    fprintf (stderr, "ERROR: Cannot allocate zero-length pointer array.\n");
-    exit (EXIT_FAILURE);
-  }
-  tmp = calloc (len, sizeof (*tmp));
-  if (tmp == NULL) {
-    fprintf (stderr, "ERROR: Cannot allocate memory for pointer array.\n");
-    exit (EXIT_FAILURE);
-  }
-  return (tmp);
+  return allocate_mem (len, sizeof (double *), "array of pointers to arrays of doubles");
 }
 
