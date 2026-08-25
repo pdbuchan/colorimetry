@@ -704,7 +704,7 @@ allocate_mem (size_t len, size_t item_size, const char *name) {
 
   void *tmp;
 
-  if (len == 0 || item_size == 0 || len > SIZE_MAX / item_size) {
+  if (len == 0 || item_size == 0 || len > (SIZE_MAX / item_size)) {
     fprintf (stderr, "Cannot allocate memory for %s: invalid size in allocate_mem().\n", name);
     exit (EXIT_FAILURE); 
   }
@@ -715,7 +715,7 @@ allocate_mem (size_t len, size_t item_size, const char *name) {
     exit (EXIT_FAILURE);
   }
 
-  return tmp;
+  return (tmp);
 }
 
 // Allocate memory for an array of doubles.
