@@ -1452,37 +1452,37 @@ allocate_mem (size_t len, size_t item_size, const char *name) {
 // Allocate memory for an array of ints.
 int *
 allocate_intmem (size_t len) {
-  return allocate_mem (len, sizeof (int), "array of ints");
+  return (allocate_mem (len, sizeof (int), "array of ints"));
 }
 
 // Allocate memory for an array of pointers to arrays of ints.
 int **
 allocate_intmemp (size_t len) {
-  return allocate_mem (len, sizeof (int *), "array of pointers to arrays of ints");
+  return (allocate_mem (len, sizeof (int *), "array of pointers to arrays of ints"));
 }
 
 // Allocate memory for an array of chars (i.e., a character string).
 char *
 allocate_strmem (size_t len) {
-  return allocate_mem (len, sizeof (char), "character array");
+  return (allocate_mem (len, sizeof (char), "character array"));
 }
 
 // Allocate memory for an array of doubles.
 double *
 allocate_doublemem (size_t len) {
-  return allocate_mem (len, sizeof (double), "array of doubles");
+  return (allocate_mem (len, sizeof (double), "array of doubles"));
 }
 
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
 allocate_doublememp (size_t len) {
-  return allocate_mem (len, sizeof (double *), "array of pointers to arrays of doubles");
+  return (allocate_mem (len, sizeof (double *), "array of pointers to arrays of doubles"));
 }
 
 // Allocate memory for an array of uint8_t.
 uint8_t *
 allocate_ustrmem (size_t len) {
-  return allocate_mem (len, sizeof (uint8_t), "array of uint8_t");
+  return (allocate_mem (len, sizeof (uint8_t), "array of uint8_t"));
 }
 
 // Return byte size for a 24-bit RGB image after checking multiplication overflow.

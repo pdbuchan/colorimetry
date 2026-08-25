@@ -721,17 +721,17 @@ allocate_mem (size_t len, size_t item_size, const char *name) {
 // Allocate memory for an array of doubles.
 double *
 allocate_doublemem (size_t len) {
-  return allocate_mem (len, sizeof (double), "array of doubles");
+  return (allocate_mem (len, sizeof (double), "array of doubles"));
 } 
   
 // Allocate memory for an array of pointers to arrays of doubles.
 double **
 allocate_doublememp (size_t len) {
-  return allocate_mem (len, sizeof (double *), "array of pointers to arrays of doubles");
+  return (allocate_mem (len, sizeof (double *), "array of pointers to arrays of doubles"));
 }
 
 // Allocate memory for an array of chars (i.e., a character string).
 char *
 allocate_strmem (size_t len) {
-  return allocate_mem (len, sizeof (char), "array of chars");
+  return (allocate_mem (len, sizeof (char), "array of chars"));
 }
