@@ -2,7 +2,7 @@
 
 C programs and CIE color-matching-function data for exploring chromaticity, RGB/XYZ conversion matrices, monochromatic wavelengths, and visible-spectrum rendering from first principles.
 
-The illustrated project description is available on the [Colorimetry GitHub Pages website](https://pdbuchan.github.io/colorimetry/).
+The complete illustrated project description is available on the [Colorimetry GitHub Pages website](https://pdbuchan.github.io/colorimetry/).
 
 ## Overview
 
